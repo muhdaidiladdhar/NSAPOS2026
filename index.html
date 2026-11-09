@@ -1039,6 +1039,76 @@ function updateStock(){
   applyHues(t);
 }
 function stamp(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function stampOf(ts){var x=new Date(ts||Date.now());return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');}
+function dayRange(d){return dt(d.openedAt)+'   Open '+tm(d.openedAt)+' to '+(d.closedAt?tm(d.closedAt):'now');}
+function dayDiff(d){return d.countedCents!=null?d.countedCents-d.expectedCashCents:null;}
+function exportDayXlsx(d){
+  if(!d) return;
+  toast('Preparing Excel file…');
+  loadLib('xlsx').then(function(X){
+    var money=function(c){return {v:(c||0)/100,t:'n',z:'$#,##0.00'};}, diff=dayDiff(d);
+    var sum=[[shopName()+' - end of day report'],[dayRange(d)],[],
+      ['Sales',''],['Total sales',money(d.revenueCents)],['Sales made',d.salesCount],['Voided sales',d.voidedCount||0],['Items sold',d.units],
+      ['Cash sales',money(d.cashCents)],['PayNow sales',money(d.paynowCents)],[],
+      ['Petty cash',''],['Opening petty cash',money(d.floatCents)],['Cash sales',money(d.cashCents)],
+      ['Petty cash balance (should be in drawer)',money(d.expectedCashCents)],
+      ['Cash counted',d.countedCents!=null?money(d.countedCents):'not entered'],['Difference (counted minus expected)',diff==null?'':money(diff)]];
+    var ws1=X.utils.aoa_to_sheet(sum); ws1['!cols']=[{wch:40},{wch:16}];
+    var items=d.items||[], q=0,c=0,l=0;
+    var it=[['Item','Category','Sold','Amount','Left (balance)']];
+    items.forEach(function(r){q+=r.qty||0;c+=r.cents||0;l+=r.left||0;it.push([r.name,r.category||'',r.qty||0,money(r.cents),r.left==null?'':r.left]);});
+    it.push([]); it.push(['Total','',q,money(c),l]);
+    var ws2=X.utils.aoa_to_sheet(it); ws2['!cols']=[{wch:32},{wch:16},{wch:8},{wch:12},{wch:14}];
+    var wb=X.utils.book_new(); X.utils.book_append_sheet(wb,ws1,'Summary'); X.utils.book_append_sheet(wb,ws2,'Items');
+    if(d.txns&&d.txns.length){
+      var tx=[['Receipt no.','Time','Payment','Items','Amount','Status']];
+      d.txns.forEach(function(t){tx.push([t.no,tm(t.ts),t.method==='cash'?'Cash':'PayNow',t.units,money(t.totalCents),t.voided?'Voided':'OK']);});
+      var ws3=X.utils.aoa_to_sheet(tx); ws3['!cols']=[{wch:16},{wch:10},{wch:10},{wch:8},{wch:12},{wch:10}];
+      X.utils.book_append_sheet(wb,ws3,'Sales');
+    }
+    X.writeFile(wb,'end-of-day-'+stampOf(d.openedAt)+'.xlsx');
+    toast('Excel report saved');
+  }).catch(function(e){console.error(e);toast("Couldn't make the Excel file. Check your internet and try again.",'bad');});
+}
+function exportDayPdf(d){
+  if(!d) return;
+  toast('Preparing PDF…');
+  loadLib('pdf').then(function(J){
+    var doc=new J({unit:'mm',format:'a4'}), diff=dayDiff(d), items=d.items||[], q=0,c=0,l=0;
+    doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(shopName()+' - end of day report',14,18);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110); doc.text(dayRange(d),14,24); doc.setTextColor(0);
+    var y=pdfTable(doc,{y0:34,heading:'Summary',cols:[{h:'',w:122},{h:'',w:60,a:'r'}],rows:[
+      ['Total sales',fmt(d.revenueCents)],
+      ['Sales made',String(d.salesCount)+(d.voidedCount?' ('+d.voidedCount+' voided)':'')],
+      ['Items sold',String(d.units)],
+      ['Cash sales',fmt(d.cashCents)],['PayNow sales',fmt(d.paynowCents)],
+      ['Opening petty cash',fmt(d.floatCents)],
+      ['Petty cash balance (should be in drawer)',fmt(d.expectedCashCents)],
+      ['Cash counted',d.countedCents!=null?fmt(d.countedCents):'not entered'],
+      ['Difference (counted minus expected)',diff==null?'-':(diff===0?'matches':(diff>0?'over ':'short ')+fmt(Math.abs(diff)))]]});
+    items.forEach(function(r){q+=r.qty||0;c+=r.cents||0;l+=r.left||0;});
+    y=pdfTable(doc,{y0:y+6,heading:'Items sold and balance',
+      cols:[{h:'Item',w:64},{h:'Category',w:36},{h:'Sold',w:20,a:'r'},{h:'Amount',w:32,a:'r'},{h:'Left (balance)',w:30,a:'r'}],
+      rows:items.map(function(r){return [r.name,r.category||'-',String(r.qty||0),r.qty>0?fmt(r.cents):'-',r.left==null?'-':String(r.left)];}),
+      foot:['Total','',String(q),fmt(c),String(l)]});
+    if(d.txns&&d.txns.length){
+      pdfTable(doc,{y0:y+6,heading:'Sales',
+        cols:[{h:'Receipt no.',w:38},{h:'Time',w:28},{h:'Payment',w:28},{h:'Items',w:20,a:'r'},{h:'Amount',w:34,a:'r'},{h:'Status',w:34}],
+        rows:d.txns.map(function(t){return [t.no,tm(t.ts),t.method==='cash'?'Cash':'PayNow',String(t.units),fmt(t.totalCents),t.voided?'Voided':'OK'];})});
+    }
+    doc.save('end-of-day-'+stampOf(d.openedAt)+'.pdf');
+    toast('PDF report saved');
+  }).catch(function(e){console.error(e);toast("Couldn't make the PDF. Check your internet and try again.",'bad');});
+}
+function showDayClosed(d){
+  S.lastDay=d;
+  M.innerHTML='<div class="overlay"><div class="sheet" role="dialog" aria-modal="true" aria-label="Day closed">'+
+    '<div class="sheet-head"><h2>Day closed</h2><button class="x" data-m="close" aria-label="Close">×</button></div>'+
+    '<dl class="sum"><div><dt>Total sales</dt><dd>'+fmt(d.revenueCents)+'</dd></div><div><dt>Items sold</dt><dd>'+d.units+'</dd></div><div class="tot"><dt>Petty cash balance</dt><dd>'+fmt(d.expectedCashCents)+'</dd></div></dl>'+
+    '<p class="sub">Your report is saved under Past days. Download a copy with what was sold and the balance:</p>'+
+    '<div class="row"><button class="btn" data-m="dl-day-xlsx">Download Excel</button><button class="btn" data-m="dl-day-pdf">Download PDF</button></div>'+
+    '<div class="row"><button class="cta" data-m="close">Done</button></div></div></div>';
+}
 function stockTotals(rows){
   return rows.reduce(function(t,r){t.units+=r.stock;t.sold+=r.sold;t.value+=r.valueCents;return t;},{units:0,sold:0,value:0});
 }
@@ -1088,6 +1158,7 @@ function mountReportToday(){
     '<h3 class="sec">Sales today</h3><section class="card tight"><ul class="txns" id="r-txns"></ul></section>'+
     '<section class="card closebox" id="r-close"></section>';
   updateReport();
+  loadLib('pdf').catch(function(){}); loadLib('xlsx').catch(function(){});
 }
 function updateReport(){
   if(!$('#r-stats')||!dayOpen()) return;
@@ -1134,14 +1205,17 @@ function updateCloseBox(){
   var el=$('#r-close'); if(!el) return;
   el.innerHTML=S.closeAsk?
     '<strong>Close the day?</strong><p class="sub">This saves today\'s report under Past days and ends sales until you open the till again. Stock stays as it is.</p><div class="actions"><button class="btn danger armed" data-act="close-confirm">Close day and save report</button><button class="btn" data-act="close-cancel">Not yet</button></div>':
-    '<div class="actions"><button class="btn" data-act="copy-report">Copy report</button><button class="btn danger" data-act="close-ask">Close the day</button></div><p class="sub">Closing saves the report and clears the till for tomorrow.</p>';
+    '<div class="actions"><button class="btn" data-act="copy-report">Copy report</button><button class="btn" data-act="today-xlsx">Excel</button><button class="btn" data-act="today-pdf">PDF</button><button class="btn danger" data-act="close-ask">Close the day</button></div><p class="sub">Closing saves the report and clears the till for tomorrow.</p>';
 }
 function dayDoc(counted){
   var m=S.meta, sum=daySummary(S.sales,m.floatCents);
   return {openedAt:m.openedAt,closedAt:Date.now(),floatCents:m.floatCents,salesCount:sum.count,voidedCount:sum.voided,units:sum.units,
     revenueCents:sum.revenueCents,cashCents:sum.cashCents,paynowCents:sum.paynowCents,expectedCashCents:sum.expectedCashCents,
     countedCents:counted,varianceCents:counted==null?null:counted-sum.expectedCashCents,items:itemsSummary(S.sales,S.products),
-    stock:S.products.map(function(p){return {name:p.name,stock:p.stock};})};
+    stock:S.products.map(function(p){return {name:p.name,stock:p.stock};}),
+    txns:S.sales.slice().sort(function(a,b){return a.ts-b.ts;}).map(function(sl){
+      return {no:String(sl.receiptNo||sl.no),ts:sl.ts,method:sl.method,units:sl.items.reduce(function(t,i){return t+i.qty;},0),totalCents:sl.totalCents,voided:!!sl.voided};
+    })};
 }
 function closeDay(){
   if(!dayOpen()) return;
@@ -1150,8 +1224,9 @@ function closeDay(){
   enqueue('meta/day',function(){return S.db.doc('meta/day').update({status:'closed',closedAt:doc.closedAt});},'Closing the day');
   S.closeAsk=false; S.counted=''; S.rv='past'; S.openDays.add(id);
   toast('Day closed. Report saved.');
+  showDayClosed(doc);
 }
-function mountPast(){V.innerHTML=reportHead()+'<div id="past"></div>';updatePast();}
+function mountPast(){V.innerHTML=reportHead()+'<div id="past"></div>';updatePast();loadLib('pdf').catch(function(){});loadLib('xlsx').catch(function(){});}
 function updatePast(){
   var el=$('#past'); if(!el) return;
   if(!S.days.length){el.innerHTML='<div class="empty"><strong>No closed days yet</strong><span>When you close a day, its report is saved here.</span></div>';return;}
@@ -1162,7 +1237,7 @@ function updatePast(){
       '<div><dt>Opening petty cash</dt><dd>'+fmt(d.floatCents)+'</dd></div><div class="tot"><dt>Petty cash balance</dt><dd>'+fmt(d.expectedCashCents)+'</dd></div>'+
       (v==null?'':'<div><dt>Counted</dt><dd>'+fmt(d.countedCents)+'</dd></div><div><dt>'+(v===0?'Drawer matches':(v>0?'Over':'Short'))+'</dt><dd>'+(v===0?'':fmt(Math.abs(v)))+'</dd></div>')+'</dl>'+
       (d.items&&d.items.length?itemsTableHTML(d.items):'')+
-      '<div class="actions"><button class="btn sm" data-act="copy-day" data-id="'+esc(d.id)+'">Copy report</button></div></div></details>';
+      '<div class="actions"><button class="btn sm" data-act="copy-day" data-id="'+esc(d.id)+'">Copy report</button><button class="btn sm" data-act="day-xlsx" data-id="'+esc(d.id)+'">Excel</button><button class="btn sm" data-act="day-pdf" data-id="'+esc(d.id)+'">PDF</button></div></div></details>';
   }).join('');
 }
 
@@ -1186,9 +1261,15 @@ function loadLib(name){
 function pdfTable(doc,o){
   var m=14, W=210-2*m, y=m+4, xs=[], x=m;
   o.cols.forEach(function(c){xs.push(x);x+=c.w;});
-  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(o.title,m,y);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110); doc.text(o.subtitle,m,y+6); doc.setTextColor(0);
-  y+=16;
+  if(o.title){
+    doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(o.title,m,y);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110); doc.text(o.subtitle,m,y+6); doc.setTextColor(0);
+    y+=16;
+  } else y=o.y0||y;
+  if(o.heading){
+    if(y>262){doc.addPage();y=m+6;}
+    doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.text(o.heading,m,y); y+=7;
+  }
   function fit(t,w){
     t=String(t==null?'':t);
     if(doc.getTextWidth(t)<=w-3) return t;
@@ -1215,7 +1296,9 @@ function pdfTable(doc,o){
     doc.setDrawColor(0); doc.line(m,y-3.2,m+W,y-3.2);
     doc.setFont('helvetica','bold');
     o.foot.forEach(function(t,i){cell(t,i,y+1);});
+    y+=7;
   }
+  return y;
 }
 function downloadReceiptPdf(sl){
   if(!sl) return;
@@ -1336,6 +1419,10 @@ document.addEventListener('click',function(e){
     case 'pdf-receipt': downloadReceiptPdf(S.rc); break;
     case 'sell-cat': S.cat=t.dataset.c; renderGrid(); break;
     case 'copy-report': copyText(reportText(shopName(),Object.assign(dayDoc(parseMoney(S.counted)),{}))); break;
+    case 'today-xlsx': if(dayOpen()) exportDayXlsx(dayDoc(parseMoney(S.counted))); break;
+    case 'today-pdf': if(dayOpen()) exportDayPdf(dayDoc(parseMoney(S.counted))); break;
+    case 'day-xlsx': var dx=S.days.find(function(x){return x.id===id;}); if(dx) exportDayXlsx(dx); break;
+    case 'day-pdf': var dp=S.days.find(function(x){return x.id===id;}); if(dp) exportDayPdf(dp); break;
     case 'copy-day': var d=S.days.find(function(x){return x.id===id;}); if(d) copyText(reportText(shopName(),d)); break;
     case 'close-ask': S.closeAsk=true; updateCloseBox(); break;
     case 'close-cancel': S.closeAsk=false; updateCloseBox(); break;
@@ -1351,6 +1438,8 @@ function onModal(m){
   if(a==='close') return closeModal();
   if(a==='signout'){closeModal();if(S.auth)S.auth.signOut();return;}
   if(a==='pick'){var f=$('#ed-file'); if(f) f.click(); return;}
+  if(a==='dl-day-xlsx'){exportDayXlsx(S.lastDay);return;}
+  if(a==='dl-day-pdf'){exportDayPdf(S.lastDay);return;}
   if(a==='cat'){var ci=$('#ed-cat'); if(ci){ci.value=m.dataset.c; paintCatPick();} return;}
   if(a==='addstock'){var si=$('#ed-stock'); var cur=parseCount(si.value)||0; si.value=cur+Number(m.dataset.n); return;}
   if(a==='save') return saveProduct();
