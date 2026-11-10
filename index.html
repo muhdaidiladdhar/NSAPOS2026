@@ -576,7 +576,7 @@ var S={
   got:{meta:false,products:false},
   meta:null,shop:{},products:[],sales:[],days:[],
   salesFor:undefined,unsubSales:null,
-  tab:'sell',rv:'today',sf:'all',cat:'all',catSig:'',
+  tab:'sell',rv:'today',sf:'all',cat:'all',catSig:'',readonly:false,
   cart:{},method:'cash',tender:'',query:'',cartOpen:false,
   counted:'',closeAsk:false,voidAsk:null,openDays:new Set(),
   key:null,cartSig:'',gridSig:'',lastNo:0,
@@ -697,6 +697,7 @@ function updateChrome(){
     b.textContent=S.persist?"You're offline. Sales are kept on this device and will sync when you're back online.":"Can't reach the database. Keep this page open until you're back online.";
   }else b.hidden=true;
   $('#tabs').hidden=!S.user; $('#gear').hidden=!S.user;
+  [].forEach.call(document.querySelectorAll('#tabs [data-tab]'),function(b){b.hidden=!!S.readonly&&(b.dataset.tab==='sell'||b.dataset.tab==='products');});
   $$('.tab').forEach(function(t){t.setAttribute('aria-selected',String(t.dataset.tab===S.tab));});
   fitChrome();
 }
@@ -749,6 +750,7 @@ function updateView(k){
 
 /* ---------- open the till ---------- */
 function gateHTML(){
+  if(S.readonly) return '<div class="empty"><strong>The till is closed</strong><span>View only. The owner opens the day to start sales.</span></div>';
   var last=(S.meta&&S.meta.floatCents!=null)?S.meta.floatCents:10000;
   return '<section class="gate card"><h2>Open the till</h2>'+
     '<p class="lede">Count the petty cash in the drawer and start the day. The drawer total and the end-of-day report are worked out from this amount.</p>'+
@@ -1028,7 +1030,7 @@ function updateStock(){
   var list=prods.slice().sort(function(a,b){return (stockStatus(a)==='out'?0:1)-(stockStatus(b)==='out'?0:1)||a.name.localeCompare(b.name);});
   if(S.sf==='out') list=list.filter(function(p){return stockStatus(p)==='out';});
   var t=$('#s-table');
-  if(!prods.length){t.innerHTML='<div class="empty"><strong>No products yet</strong><span>Your stock balance shows here once you add products.</span><button class="btn" data-act="new-product">Add product</button></div>';return;}
+  if(!prods.length){t.innerHTML='<div class="empty"><strong>No products yet</strong><span>Your stock balance shows here once you add products.</span>'+(S.readonly?'':'<button class="btn" data-act="new-product">Add product</button>')+'</div>';return;}
   if(!list.length){t.innerHTML='<div class="empty"><strong>Nothing is sold out</strong><span>Every product still has stock.</span></div>';return;}
   t.innerHTML='<div class="tablewrap"><table class="tbl"><thead><tr><th>Product</th><th class="n">Left</th><th class="n">Sold today</th><th class="n hide-sm">Price</th></tr></thead><tbody>'+
     list.map(function(p){
@@ -1179,7 +1181,7 @@ function updateReport(){
       '<span class="chip '+(s.method==='cash'?'cash':'paynow')+'">'+(s.method==='cash'?'Cash':'PayNow')+'</span>'+(s.voided?'<span class="chip void">Voided</span>':'')+
       '<span class="sub">'+tm(s.ts)+' · '+n+(n===1?' item':' items')+'</span></div><span class="amt2">'+fmt(s.totalCents)+'</span></div>'+
       '<div class="acts"><button class="btn sm" data-act="show-receipt" data-id="'+esc(s.id)+'">Receipt</button>'+
-      (s.voided?'':(asking?'<span class="ask">Void this sale? Stock goes back.</span><button class="btn sm danger armed" data-act="void-confirm" data-id="'+esc(s.id)+'">Yes, void</button><button class="btn sm" data-act="void-cancel">Keep</button>':'<button class="btn sm" data-act="void-ask" data-id="'+esc(s.id)+'">Void</button>'))+'</div></li>';
+      (s.voided||S.readonly?'':(asking?'<span class="ask">Void this sale? Stock goes back.</span><button class="btn sm danger armed" data-act="void-confirm" data-id="'+esc(s.id)+'">Yes, void</button><button class="btn sm" data-act="void-cancel">Keep</button>':'<button class="btn sm" data-act="void-ask" data-id="'+esc(s.id)+'">Void</button>'))+'</div></li>';
   }).join(''):'<li class="sub none">No sales yet today.</li>';
   updateCloseBox();
 }
@@ -1203,6 +1205,7 @@ function updateVariance(sum){
 }
 function updateCloseBox(){
   var el=$('#r-close'); if(!el) return;
+  if(S.readonly){el.innerHTML='<div class="actions"><button class="btn" data-act="copy-report">Copy report</button><button class="btn" data-act="today-xlsx">Excel</button><button class="btn" data-act="today-pdf">PDF</button></div><p class="sub">View only.</p>';return;}
   el.innerHTML=S.closeAsk?
     '<strong>Close the day?</strong><p class="sub">This saves today\'s report under Past days and ends sales until you open the till again. Stock stays as it is.</p><div class="actions"><button class="btn danger armed" data-act="close-confirm">Close day and save report</button><button class="btn" data-act="close-cancel">Not yet</button></div>':
     '<div class="actions"><button class="btn" data-act="copy-report">Copy report</button><button class="btn" data-act="today-xlsx">Excel</button><button class="btn" data-act="today-pdf">PDF</button><button class="btn danger" data-act="close-ask">Close the day</button></div><p class="sub">Closing saves the report and clears the till for tomorrow.</p>';
@@ -1358,6 +1361,13 @@ function showReceipt(s,isNew){
     '<div class="row"><button class="btn" data-m="copy-receipt">Copy receipt text</button><button class="cta" data-m="close">'+(isNew?'Next customer':'Close')+'</button></div></div></div>';
 }
 function openSettings(){
+  if(S.readonly){
+    M.innerHTML='<div class="overlay"><div class="sheet" role="dialog" aria-modal="true" aria-label="Account">'+
+      '<div class="sheet-head"><h2>Account</h2><button class="x" data-m="close" aria-label="Close">×</button></div>'+
+      '<p class="sub">View only account. You can look at stock and reports but not change anything.</p>'+
+      (S.user?'<div class="field"><span class="lbl">Signed in as '+esc(String(S.user.email||'').replace(/@nsapos\.app$/,''))+'</span><button class="btn js-start" data-m="signout">Sign out</button></div>':'')+'</div></div>';
+    return;
+  }
   S.ed={qrFile:null,removeQr:false,preview:qrSrc(),saving:false,settings:true};
   M.innerHTML='<div class="overlay"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="st-t">'+
     '<div class="sheet-head"><h2 id="st-t">Shop settings</h2><button class="x" data-m="close" aria-label="Close">×</button></div>'+
@@ -1546,6 +1556,7 @@ function resetData(){
   S.salesFor=undefined; S.got={meta:false,products:false}; S.meta=null; S.shop={}; S.products=[]; S.sales=[]; S.days=[];
   S.cart={}; S.tender=''; S.confirmed=false; S.slow=false; S.denied=false; S.closeAsk=false; S.voidAsk=null; S.key=null; S.gridSig=''; S.cartSig='';
 }
+var READONLY_USERS=['nsa@nsapos.app'];
 function initFirebase(){
   var cfg=window.FIREBASE_CONFIG;
   if(!cfg||!cfg.apiKey||/PASTE|YOUR/i.test(String(cfg.apiKey))){S.noconfig=true;return;}
@@ -1555,6 +1566,8 @@ function initFirebase(){
   try{ S.db.enablePersistence({synchronizeTabs:true}).then(function(){S.persist=true;refresh();},function(){S.persist=false;}); }catch(e){}
   S.auth.onAuthStateChanged(function(u){
     S.authReady=true;
+    S.readonly=!!u&&READONLY_USERS.indexOf(String(u.email||'').toLowerCase())>=0;
+    if(S.readonly&&(S.tab==='sell'||S.tab==='products')) S.tab='stock';
     if(u){S.user=u; if(!S.unsubs.length) subscribe();}
     else{S.user=null; resetData();}
     refresh();
