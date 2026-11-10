@@ -1366,7 +1366,7 @@ function openSettings(){
     '<input id="ed-file" type="file" accept="image/*" hidden>'+
     '<p class="err" id="ed-err" role="alert"></p>'+
     '<div class="row"><button class="cta" data-m="save-settings">Save</button></div>'+
-    (S.user?'<div class="field"><span class="lbl">Signed in as '+esc(S.user.email||'')+'</span><button class="btn js-start" data-m="signout">Sign out</button></div>':'')+'</div></div>';
+    (S.user?'<div class="field"><span class="lbl">Signed in as '+esc((S.user.email||'').replace(/@nsapos\.app$/,''))+'</span><button class="btn js-start" data-m="signout">Sign out</button></div>':'')+'</div></div>';
   paintPhotoBox();
 }
 function saveSettings(){
@@ -1515,15 +1515,15 @@ function subscribe(){
   setTimeout(function(){if(!S.confirmed){S.slow=true;refresh();}},10000);
 }
 function signinHTML(){
-  return '<section class="gate card"><h2>Sign in</h2><p class="lede">Use the email and password you created for NSA POS 2026.</p>'+
-    '<div class="field"><label for="si-email">Email</label><input id="si-email" class="text" type="email" autocomplete="username" autocapitalize="off" spellcheck="false"></div>'+
+  return '<section class="gate card"><h2>Sign in</h2><p class="lede">Use the username and password you created for NSA POS 2026.</p>'+
+    '<div class="field"><label for="si-email">Username</label><input id="si-email" class="text" type="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></div>'+
     '<div class="field"><label for="si-pass">Password</label><input id="si-pass" class="text" type="password" autocomplete="current-password"></div>'+
     '<p class="err" id="si-err" role="alert"></p><button class="cta" data-act="signin">Sign in</button></section>';
 }
 function authError(e){
   var c=(e&&e.code)||'';
-  if(c==='auth/invalid-credential'||c==='auth/wrong-password'||c==='auth/user-not-found'||c==='auth/invalid-login-credentials') return 'That email and password do not match. Check them and try again.';
-  if(c==='auth/invalid-email') return 'That email address does not look right.';
+  if(c==='auth/invalid-credential'||c==='auth/wrong-password'||c==='auth/user-not-found'||c==='auth/invalid-login-credentials') return 'That username and password do not match. Check them and try again.';
+  if(c==='auth/invalid-email') return 'That username does not look right. Use letters and numbers only.';
   if(c==='auth/too-many-requests') return 'Too many attempts. Wait a few minutes and try again.';
   if(c==='auth/network-request-failed') return 'No internet connection. Connect and try again.';
   if(c==='auth/operation-not-allowed') return 'Email sign-in is switched off in your Firebase project. Turn on Email/Password under Authentication.';
@@ -1532,8 +1532,9 @@ function authError(e){
 function doSignIn(){
   var em=$('#si-email'), pw=$('#si-pass'), err=$('#si-err'), btn=$('[data-act="signin"]');
   if(!em||!pw||!S.auth) return;
-  var email=em.value.trim(), pass=pw.value;
-  if(!email||!pass){err.textContent='Enter your email and password.';return;}
+  var email=em.value.trim().toLowerCase(), pass=pw.value;
+  if(!email||!pass){err.textContent='Enter your username and password.';return;}
+  if(email.indexOf('@')<0) email=email.replace(/\s+/g,'')+'@nsapos.app';
   err.textContent=''; btn.disabled=true; btn.textContent='Signing in…';
   S.auth.signInWithEmailAndPassword(email,pass).catch(function(e){
     err.textContent=authError(e); btn.disabled=false; btn.textContent='Sign in';
