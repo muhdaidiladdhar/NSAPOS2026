@@ -334,6 +334,7 @@ details.day strong{font:500 17px var(--font-mono)}
 .pubr{max-width:380px;margin:8px auto 0}
 .c{text-align:center}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media(max-width:390px){#shopname{font-size:18px}.topbar{gap:8px}.topright{gap:6px}.iconbtn{width:36px;height:36px}.drawer{padding:4px 8px}.drawer strong{font-size:15px}.drawer span{font-size:9px}}
 </style>
 </head>
 <body>
@@ -346,6 +347,7 @@ details.day strong{font:500 17px var(--font-mono)}
         <span class="saving" id="saving" hidden>Saving…</span>
         <div class="drawer" id="drawer" hidden></div>
         <button class="iconbtn" id="gear" data-act="settings" aria-label="Shop settings"></button>
+        <button class="iconbtn" id="logout" data-act="logout" aria-label="Log out" title="Log out" hidden></button>
       </div>
     </div>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Sections"></nav>
@@ -696,7 +698,7 @@ function updateChrome(){
     b.hidden=false;
     b.textContent=S.persist?"You're offline. Sales are kept on this device and will sync when you're back online.":"Can't reach the database. Keep this page open until you're back online.";
   }else b.hidden=true;
-  $('#tabs').hidden=!S.user; $('#gear').hidden=!S.user;
+  $('#tabs').hidden=!S.user; $('#gear').hidden=!S.user; $('#logout').hidden=!S.user;
   [].forEach.call(document.querySelectorAll('#tabs [data-tab]'),function(b){b.hidden=!!S.staff&&b.dataset.tab==='products';});
   $$('.tab').forEach(function(t){t.setAttribute('aria-selected',String(t.dataset.tab===S.tab));});
   fitChrome();
@@ -1416,6 +1418,10 @@ document.addEventListener('click',function(e){
     case 'open-day': openDay(); break;
     case 'signin': doSignIn(); break;
     case 'signout': if(S.auth) S.auth.signOut(); break;
+    case 'logout':
+      if(S.pending>0){toast('Wait until it says saved, then log out.');break;}
+      if(S.auth){closeModal();S.auth.signOut();toast('Logged out');}
+      break;
     case 'new-product': openProduct(null); break;
     case 'edit-product': openProduct(id); break;
     case 'settings': openSettings(); break;
@@ -1484,6 +1490,7 @@ window.addEventListener('resize',fitChrome);
 /* ---------- shell ---------- */
 $('#tabs').innerHTML=TABS.map(function(t){return '<button class="tab" role="tab" data-act="tab" data-tab="'+t[0]+'" aria-selected="false">'+ICON[t[2]]+'<span>'+t[1]+'</span></button>';}).join('');
 $('#gear').innerHTML=ICON.gear;
+$('#logout').innerHTML='<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>';
 
 /* ---------- data ---------- */
 function note(snap){
