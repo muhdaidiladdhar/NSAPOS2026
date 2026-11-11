@@ -319,6 +319,10 @@ details.day strong{font:500 17px var(--font-mono)}
 .chrome[hidden]{display:none}
 .catbar{margin-bottom:12px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
 .catbar[hidden]{display:none}
+.cathead{display:flex;justify-content:space-between;font:800 12px var(--font-ui);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:18px 2px 8px}
+.cathead:first-child{margin-top:4px}
+.items tr.grp td{background:color-mix(in srgb,var(--ink) 6%,transparent);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.items.cats tr.it td:first-child{padding-left:18px}
 .catbar button{flex:none;white-space:nowrap}
 .catpick button{font:700 13px var(--font-ui);padding:7px 12px}
 .catpick button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -445,6 +449,17 @@ function soldByProduct(sales){
   sales.forEach(function(s){ if(s.voided) return; s.items.forEach(function(it){ if(it.pid) m[it.pid]=(m[it.pid]||0)+it.qty; }); });
   return m;
 }
+function groupByCategory(rows){
+  var m=new Map();
+  (rows||[]).forEach(function(r){
+    var c=normCat(r.category), k=c.toLowerCase();
+    if(!m.has(k)) m.set(k,{cat:c,rows:[],qty:0,cents:0,left:0});
+    var g=m.get(k); g.rows.push(r); g.qty+=r.qty||0; g.cents+=r.cents||0; g.left+=r.left||0;
+  });
+  return Array.from(m.values()).sort(function(a,b){
+    if(!a.cat) return 1; if(!b.cat) return -1; return a.cat.localeCompare(b.cat);
+  });
+}
 /* one row per product: sold today (qty, amount) and what is left. Sold items whose product was deleted keep a row with left=null. */
 function itemsSummary(sales,products){
   var by=new Map(), rows=[];
@@ -551,9 +566,13 @@ function reportText(shop,d){
   var sold=(d.items||[]).filter(function(it){return it.qty>0;});
   if(sold.length){
     L.push('-'.repeat(W)); L.push('Items sold');
-    sold.forEach(function(it){
-      L.push(padRow(it.qty+' x '+it.name,fmt(it.cents),W));
-      if(it.left!=null) L.push('   balance: '+it.left+' left');
+    var gs=groupByCategory(sold), anyCat=gs.some(function(g){return g.cat;});
+    gs.forEach(function(g){
+      if(anyCat) L.push(padRow('['+(g.cat||'Other')+']',fmt(g.cents),W));
+      g.rows.forEach(function(it){
+        L.push(padRow(it.qty+' x '+it.name,fmt(it.cents),W));
+        if(it.left!=null) L.push('   balance: '+it.left+' left');
+      });
     });
   }
   var rest=(d.items||[]).filter(function(it){return !(it.qty>0)&&it.left!=null;});
@@ -578,7 +597,7 @@ var S={
   got:{meta:false,products:false},
   meta:null,shop:{},products:[],sales:[],days:[],
   salesFor:undefined,unsubSales:null,
-  tab:'sell',rv:'today',sf:'all',cat:'all',catSig:'',staff:false,
+  tab:'sell',rv:'today',sf:'all',cat:'all',catSig:'',staff:false,pcat:'all',pcatSig:'',
   cart:{},method:'cash',tender:'',query:'',cartOpen:false,
   counted:'',closeAsk:false,voidAsk:null,openDays:new Set(),
   key:null,cartSig:'',gridSig:'',lastNo:0,
@@ -929,16 +948,45 @@ function voidSale(id){
 
 /* ---------- PRODUCTS ---------- */
 function mountProducts(){
-  V.innerHTML='<div class="pagehead"><h2>Products</h2><button class="btn" data-act="new-product">Add product</button></div><div id="plist"></div>';
+  V.innerHTML='<div class="pagehead"><h2>Products</h2><button class="btn" data-act="new-product">Add product</button></div><div id="pcatbar" class="filters catbar" hidden></div><div id="plist"></div>';
+  S.pcatSig='';
   updateProducts();
+}
+function productRowHTML(p){
+  return '<button class="prow" data-act="edit-product" data-id="'+esc(p.id)+'">'+picHTML(p,'sm')+
+    '<span class="pinfo"><strong>'+esc(p.name)+'</strong><span class="sub mono">'+fmt(p.priceCents)+' · '+p.stock+' in stock</span></span>'+chipFor(p)+'<span class="chev" aria-hidden="true">›</span></button>';
 }
 function updateProducts(){
   var el=$('#plist'); if(!el) return;
-  if(!S.products.length){el.innerHTML='<div class="empty"><strong>No products yet</strong><span>Add each thing you sell with a photo, a price and the quantity you have.</span><button class="btn" data-act="new-product">Add your first product</button></div>';return;}
-  el.innerHTML=S.products.slice().sort(function(a,b){return a.name.localeCompare(b.name);}).map(function(p){
-    return '<button class="prow" data-act="edit-product" data-id="'+esc(p.id)+'">'+picHTML(p,'sm')+
-      '<span class="pinfo"><strong>'+esc(p.name)+'</strong><span class="sub mono">'+fmt(p.priceCents)+' · '+p.stock+' in stock'+(normCat(p.category)?' · '+esc(normCat(p.category)):'')+'</span></span>'+chipFor(p)+'<span class="chev" aria-hidden="true">›</span></button>';
-  }).join('');
+  var bar=$('#pcatbar');
+  if(!S.products.length){
+    if(bar){bar.hidden=true;bar.innerHTML='';S.pcatSig='';}
+    el.innerHTML='<div class="empty"><strong>No products yet</strong><span>Add each thing you sell with a photo, a price and the quantity you have.</span><button class="btn" data-act="new-product">Add your first product</button></div>';
+    return;
+  }
+  var cats=categoriesOf(S.products), hasNone=S.products.some(function(p){return !normCat(p.category);});
+  if(S.pcat!=='all'&&S.pcat!=='__none'&&!cats.some(function(c){return sameCat(c,S.pcat);})) S.pcat='all';
+  if(S.pcat==='__none'&&!hasNone) S.pcat='all';
+  var chips='';
+  if(cats.length){
+    chips='<button data-act="prod-cat" data-c="all" aria-pressed="'+(S.pcat==='all')+'">All</button>'+
+      cats.map(function(c){return '<button data-act="prod-cat" data-c="'+esc(c)+'" aria-pressed="'+(S.pcat!=='all'&&S.pcat!=='__none'&&sameCat(c,S.pcat))+'">'+esc(c)+'</button>';}).join('')+
+      (hasNone?'<button data-act="prod-cat" data-c="__none" aria-pressed="'+(S.pcat==='__none')+'">Other</button>':'');
+  }
+  if(bar){ if(chips!==S.pcatSig){S.pcatSig=chips;bar.innerHTML=chips;} bar.hidden=!chips; }
+  var list=S.products.filter(function(p){
+    if(S.pcat==='all') return true;
+    if(S.pcat==='__none') return !normCat(p.category);
+    return sameCat(p.category,S.pcat);
+  }).sort(function(a,b){return a.name.localeCompare(b.name);});
+  var html;
+  if(S.pcat==='all'&&cats.length){
+    var groups=groupByCategory(list.map(function(p){return {p:p,category:p.category};}));
+    html=groups.map(function(g){
+      return '<h3 class="cathead"><span>'+esc(g.cat||'Other')+'</span><span>'+g.rows.length+'</span></h3>'+g.rows.map(function(r){return productRowHTML(r.p);}).join('');
+    }).join('');
+  } else html=list.map(productRowHTML).join('');
+  el.innerHTML=html;
   applyHues(el);
 }
 function openProduct(id){
@@ -1057,10 +1105,13 @@ function exportDayXlsx(d){
       ['Petty cash balance (should be in drawer)',money(d.expectedCashCents)],
       ['Cash counted',d.countedCents!=null?money(d.countedCents):'not entered'],['Difference (counted minus expected)',diff==null?'':money(diff)]];
     var ws1=X.utils.aoa_to_sheet(sum); ws1['!cols']=[{wch:40},{wch:16}];
-    var items=d.items||[], q=0,c=0,l=0;
+    var items=d.items||[], q=0,c=0,l=0, gs=groupByCategory(items), anyCat=gs.some(function(g){return g.cat;});
     var it=[['Item','Category','Sold','Amount','Left (balance)']];
-    items.forEach(function(r){q+=r.qty||0;c+=r.cents||0;l+=r.left||0;it.push([r.name,r.category||'',r.qty||0,money(r.cents),r.left==null?'':r.left]);});
-    it.push([]); it.push(['Total','',q,money(c),l]);
+    gs.forEach(function(g){
+      g.rows.forEach(function(r){q+=r.qty||0;c+=r.cents||0;l+=r.left||0;it.push([r.name,r.category||'',r.qty||0,money(r.cents),r.left==null?'':r.left]);});
+      if(anyCat){it.push(['Subtotal: '+(g.cat||'Other'),'',g.qty,money(g.cents),g.left]); it.push([]);}
+    });
+    it.push(['Total','',q,money(c),l]);
     var ws2=X.utils.aoa_to_sheet(it); ws2['!cols']=[{wch:32},{wch:16},{wch:8},{wch:12},{wch:14}];
     var wb=X.utils.book_new(); X.utils.book_append_sheet(wb,ws1,'Summary'); X.utils.book_append_sheet(wb,ws2,'Items');
     if(d.txns&&d.txns.length){
@@ -1090,10 +1141,14 @@ function exportDayPdf(d){
       ['Cash counted',d.countedCents!=null?fmt(d.countedCents):'not entered'],
       ['Difference (counted minus expected)',diff==null?'-':(diff===0?'matches':(diff>0?'over ':'short ')+fmt(Math.abs(diff)))]]});
     items.forEach(function(r){q+=r.qty||0;c+=r.cents||0;l+=r.left||0;});
+    var gs=groupByCategory(items), anyCat=gs.some(function(g){return g.cat;}), irows=[];
+    gs.forEach(function(g){
+      if(anyCat) irows.push({group:true,cells:[g.cat||'Other',String(g.qty),fmt(g.cents),String(g.left)]});
+      g.rows.forEach(function(r){irows.push([(anyCat?'   ':'')+r.name,String(r.qty||0),r.qty>0?fmt(r.cents):'-',r.left==null?'-':String(r.left)]);});
+    });
     y=pdfTable(doc,{y0:y+6,heading:'Items sold and balance',
-      cols:[{h:'Item',w:64},{h:'Category',w:36},{h:'Sold',w:20,a:'r'},{h:'Amount',w:32,a:'r'},{h:'Left (balance)',w:30,a:'r'}],
-      rows:items.map(function(r){return [r.name,r.category||'-',String(r.qty||0),r.qty>0?fmt(r.cents):'-',r.left==null?'-':String(r.left)];}),
-      foot:['Total','',String(q),fmt(c),String(l)]});
+      cols:[{h:'Item',w:100},{h:'Sold',w:24,a:'r'},{h:'Amount',w:30,a:'r'},{h:'Left (balance)',w:28,a:'r'}],
+      rows:irows,foot:['Total',String(q),fmt(c),String(l)]});
     if(d.txns&&d.txns.length){
       pdfTable(doc,{y0:y+6,heading:'Sales',
         cols:[{h:'Receipt no.',w:38},{h:'Time',w:28},{h:'Payment',w:28},{h:'Items',w:20,a:'r'},{h:'Amount',w:34,a:'r'},{h:'Status',w:34}],
@@ -1188,12 +1243,16 @@ function updateReport(){
 }
 function itemsTableHTML(rows){
   if(!rows||!rows.length) return '<p class="sub">Nothing sold yet.</p>';
-  var q=0,c=0,l=0;
+  var q=0,c=0,l=0, gs=groupByCategory(rows), anyCat=gs.some(function(g){return g.cat;});
   rows.forEach(function(r){q+=r.qty||0;c+=r.cents||0;l+=r.left||0;});
-  return '<div class="tablewrap"><table class="tbl items"><thead><tr><th>Item</th><th class="n">Sold</th><th class="n">Amount</th><th class="n">Left</th></tr></thead><tbody>'+
-    rows.map(function(r){
-      return '<tr class="'+(r.qty>0?'':'zero')+'"><td>'+esc(r.name)+'</td><td class="n">'+(r.qty||0)+'</td><td class="n">'+(r.qty>0?fmt(r.cents):'—')+'</td><td class="n">'+(r.left==null?'—':r.left)+'</td></tr>';
-    }).join('')+'</tbody><tfoot><tr><td>Total</td><td class="n">'+q+'</td><td class="n">'+fmt(c)+'</td><td class="n">'+l+'</td></tr></tfoot></table></div>';
+  var body=gs.map(function(g){
+    var head=anyCat?'<tr class="grp"><td>'+esc(g.cat||'Other')+'</td><td class="n">'+g.qty+'</td><td class="n">'+fmt(g.cents)+'</td><td class="n">'+g.left+'</td></tr>':'';
+    return head+g.rows.map(function(r){
+      return '<tr class="it '+(r.qty>0?'':'zero')+'"><td>'+esc(r.name)+'</td><td class="n">'+(r.qty||0)+'</td><td class="n">'+(r.qty>0?fmt(r.cents):'—')+'</td><td class="n">'+(r.left==null?'—':r.left)+'</td></tr>';
+    }).join('');
+  }).join('');
+  return '<div class="tablewrap"><table class="tbl items'+(anyCat?' cats':'')+'"><thead><tr><th>Item</th><th class="n">Sold</th><th class="n">Amount</th><th class="n">Left</th></tr></thead><tbody>'+body+
+    '</tbody><tfoot><tr><td>Total</td><td class="n">'+q+'</td><td class="n">'+fmt(c)+'</td><td class="n">'+l+'</td></tr></tfoot></table></div>';
 }
 function updateVariance(sum){
   var v=$('#variance'); if(!v) return;
@@ -1291,7 +1350,10 @@ function pdfTable(doc,o){
   header();
   o.rows.forEach(function(r){
     if(y>280){doc.addPage();y=m+6;header();}
-    r.forEach(function(t,i){cell(t,i,y);});
+    var g=!Array.isArray(r)&&r.group, cells=g?r.cells:r;
+    if(g){doc.setFillColor(244,246,250); doc.rect(m,y-4.8,W,7,'F'); doc.setFont('helvetica','bold');}
+    cells.forEach(function(t,i){cell(t,i,y);});
+    if(g) doc.setFont('helvetica','normal');
     doc.setDrawColor(225); doc.line(m,y+2.2,m+W,y+2.2); y+=7;
   });
   if(o.foot){
@@ -1432,6 +1494,7 @@ document.addEventListener('click',function(e){
     case 'export-stock-pdf': exportStockPdf(); break;
     case 'pdf-receipt': downloadReceiptPdf(S.rc); break;
     case 'sell-cat': S.cat=t.dataset.c; renderGrid(); break;
+    case 'prod-cat': S.pcat=t.dataset.c; updateProducts(); break;
     case 'copy-report': copyText(reportText(shopName(),Object.assign(dayDoc(parseMoney(S.counted)),{}))); break;
     case 'today-xlsx': if(dayOpen()) exportDayXlsx(dayDoc(parseMoney(S.counted))); break;
     case 'today-pdf': if(dayOpen()) exportDayPdf(dayDoc(parseMoney(S.counted))); break;
