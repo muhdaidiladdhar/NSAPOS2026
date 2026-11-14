@@ -319,6 +319,20 @@ details.day strong{font:500 17px var(--font-mono)}
 .chrome[hidden]{display:none}
 .catbar{margin-bottom:12px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
 .catbar[hidden]{display:none}
+.chip.deal{background:var(--accent);color:var(--accent-ink)}
+.tile .stk{display:flex;gap:4px;flex-wrap:wrap;right:8px}
+.tile .stk .chip.deal{background:var(--accent);color:var(--accent-ink)}
+.was{font-size:12px;color:var(--muted);font-weight:400}
+.ln .deal{display:block;color:var(--accent);font-size:12px;font-weight:700;margin-top:2px;overflow-wrap:anywhere}
+.tog{margin-top:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font:700 11px var(--font-ui);color:var(--muted)}
+.tog[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.check{display:flex;gap:10px;align-items:flex-start;font-weight:700}
+.check input{width:20px;height:20px;margin-top:1px;flex:none}
+.brow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.brow:first-child{border-top:0}
+.brow .bn{flex:1;min-width:0;display:grid;gap:1px}
+.brow.on .bn strong{color:var(--accent)}
+.bnote{display:block;font-size:11px;color:var(--muted)}
 .cathead{display:flex;justify-content:space-between;font:800 12px var(--font-ui);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:18px 2px 8px}
 .cathead:first-child{margin-top:4px}
 .items tr.grp td{background:color-mix(in srgb,var(--ink) 6%,transparent);font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
@@ -394,16 +408,71 @@ function parseCount(s){
   s=String(s==null?'':s).trim();
   return /^\d{1,7}$/.test(s)?parseInt(s,10):null;
 }
-function cartLines(cart,products){
+function bogoOn(p,ov){return ov&&Object.prototype.hasOwnProperty.call(ov,p.id)?!!ov[p.id]:!!p.bogo;}
+function cartLines(cart,products,bundles,ov){
   var by=new Map((products||[]).map(function(p){return [p.id,p];}));
+  var bb=new Map((bundles||[]).map(function(b){return [b.id,b];}));
   var lines=[];
-  Object.keys(cart).forEach(function(pid){
-    var qty=cart[pid], p=by.get(pid);
-    if(!p||!(qty>0)) return;
-    lines.push({pid:pid,name:p.name,priceCents:p.priceCents,qty:qty,lineCents:p.priceCents*qty});
+  Object.keys(cart).forEach(function(k){
+    var qty=cart[k];
+    if(!(qty>0)) return;
+    if(k.indexOf('b:')===0){
+      var b=bb.get(k.slice(2)); if(!b||!b.items||!b.items.length) return;
+      var parts=[], reg=0, bad=false;
+      b.items.forEach(function(x){var p=by.get(x.pid); if(!p){bad=true;return;} parts.push({pid:p.id,name:p.name,qty:x.qty,priceCents:p.priceCents}); reg+=p.priceCents*x.qty;});
+      if(bad) return;
+      lines.push({key:k,bid:b.id,pid:null,bundle:true,name:b.name,priceCents:b.priceCents,qty:qty,free:0,lineCents:b.priceCents*qty,parts:parts,regularCents:reg});
+      return;
+    }
+    var p=by.get(k); if(!p) return;
+    var on=bogoOn(p,ov), free=on?Math.floor(qty/2):0;
+    lines.push({key:k,pid:k,name:p.name,priceCents:p.priceCents,qty:qty,free:free,bogo:on,lineCents:p.priceCents*(qty-free)});
   });
   return lines;
 }
+/* split a total into whole cents in proportion to weights; always adds up exactly */
+function allocate(total,weights){
+  var n=weights.length, sum=weights.reduce(function(a,b){return a+b;},0), base=[], fr=[];
+  weights.forEach(function(w,i){
+    if(sum>0){base.push(Math.floor(total*w/sum)); fr.push((total*w)%sum);}
+    else{base.push(Math.floor(total/n)); fr.push(0);}
+  });
+  var rem=total-base.reduce(function(a,b){return a+b;},0);
+  var order=base.map(function(_,i){return i;}).sort(function(a,b){return fr[b]-fr[a]||a-b;});
+  for(var i=0;rem>0;i=(i+1)%n,rem--) base[order[i]]++;
+  return base;
+}
+/* what is stored on the sale: one row per product, free units and bundle shares included, so every total adds up */
+function saleItems(lines){
+  var out=[];
+  lines.forEach(function(l){
+    if(l.bundle){
+      var units=[];
+      l.parts.forEach(function(p){for(var i=0;i<p.qty;i++) units.push(p);});
+      var al=allocate(l.priceCents,units.map(function(u){return u.priceCents;})), rows=new Map();
+      units.forEach(function(u,i){
+        var k=u.pid+'|'+al[i], r=rows.get(k);
+        if(!r){r={pid:u.pid,name:u.name,priceCents:al[i],qty:0,bundle:l.name};rows.set(k,r);out.push(r);}
+        r.qty+=l.qty;
+      });
+    }else{
+      var paid=l.qty-l.free;
+      if(paid>0) out.push({pid:l.pid,name:l.name,priceCents:l.priceCents,qty:paid});
+      if(l.free>0) out.push({pid:l.pid,name:l.name,priceCents:0,qty:l.free,free:true});
+    }
+  });
+  return out;
+}
+/* units of each product the order will take out of stock */
+function cartNeeds(lines){
+  var m={};
+  lines.forEach(function(l){
+    if(l.bundle) l.parts.forEach(function(p){m[p.pid]=(m[p.pid]||0)+p.qty*l.qty;});
+    else m[l.pid]=(m[l.pid]||0)+l.qty;
+  });
+  return m;
+}
+function itemLabel(it){return it.name+(it.free?' (free)':'');}
 function cartTotal(lines){return lines.reduce(function(s,l){return s+l.lineCents;},0);}
 function quickTenders(total){
   if(!(total>0)) return [];
@@ -500,7 +569,7 @@ function unb64url(t){
 }
 function receiptPayload(sl){
   return b64url(JSON.stringify([1,Math.round(sl.ts/1000),sl.receiptNo,sl.method==='cash'?'c':'p',sl.tenderedCents||0,sl.changeCents||0,
-    sl.items.map(function(it){return [String(it.name).slice(0,40),it.qty,it.priceCents];})]));
+    sl.items.map(function(it){return [String(itemLabel(it)).slice(0,40),it.qty,it.priceCents];})]));
 }
 function parseReceiptHash(h){
   var m=/^#r=([A-Za-z0-9_-]+)$/.exec(h||''); if(!m) return null;
@@ -535,7 +604,7 @@ function receiptText(shop,s){
   L.push(dt(s.ts)+', '+tm(s.ts));
   L.push('No. '+s.receiptNo);
   L.push('-'.repeat(W));
-  s.items.forEach(function(it){L.push(padRow(it.qty+' x '+it.name,fmt(it.priceCents*it.qty),W));});
+  s.items.forEach(function(it){L.push(padRow(it.qty+' x '+itemLabel(it),fmt(it.priceCents*it.qty),W)); if(it.bundle) L.push('   in '+it.bundle);});
   L.push('-'.repeat(W));
   L.push(padRow('TOTAL',fmt(s.totalCents),W));
   if(s.method==='cash'){L.push(padRow('Cash',fmt(s.tenderedCents),W));L.push(padRow('Change',fmt(s.changeCents),W));}
@@ -598,7 +667,7 @@ var S={
   meta:null,shop:{},products:[],sales:[],days:[],
   salesFor:undefined,unsubSales:null,
   tab:'sell',rv:'today',sf:'all',cat:'all',catSig:'',staff:false,pcat:'all',pcatSig:'',
-  cart:{},method:'cash',tender:'',query:'',cartOpen:false,
+  cart:{},bundles:[],bogo:{},be:null,method:'cash',tender:'',query:'',cartOpen:false,
   counted:'',closeAsk:false,voidAsk:null,openDays:new Set(),
   key:null,cartSig:'',gridSig:'',lastNo:0,
   confirmed:false,slow:false,pending:0,qs:new Map(),
@@ -805,40 +874,62 @@ function picHTML(p,cls,extra){
 }
 function renderCatbar(){
   var bar=$('#catbar'); if(!bar) return;
-  var cats=categoriesOf(S.products), hasNone=S.products.some(function(p){return !normCat(p.category);});
-  if(S.cat!=='all'&&S.cat!=='__none'&&!cats.some(function(c){return sameCat(c,S.cat);})) S.cat='all';
+  var cats=categoriesOf(S.products), hasNone=S.products.some(function(p){return !normCat(p.category);}), hasB=S.bundles.length>0;
+  if(S.cat==='__bundles'&&!hasB) S.cat='all';
+  if(S.cat!=='all'&&S.cat!=='__none'&&S.cat!=='__bundles'&&!cats.some(function(c){return sameCat(c,S.cat);})) S.cat='all';
   if(S.cat==='__none'&&!hasNone) S.cat='all';
   var html='';
-  if(cats.length){
+  if(cats.length||hasB){
     html='<button data-act="sell-cat" data-c="all" aria-pressed="'+(S.cat==='all')+'">All</button>'+
-      cats.map(function(c){return '<button data-act="sell-cat" data-c="'+esc(c)+'" aria-pressed="'+(S.cat!=='all'&&S.cat!=='__none'&&sameCat(c,S.cat))+'">'+esc(c)+'</button>';}).join('')+
-      (hasNone?'<button data-act="sell-cat" data-c="__none" aria-pressed="'+(S.cat==='__none')+'">Other</button>':'');
+      cats.map(function(c){return '<button data-act="sell-cat" data-c="'+esc(c)+'" aria-pressed="'+(S.cat!=='all'&&S.cat!=='__none'&&S.cat!=='__bundles'&&sameCat(c,S.cat))+'">'+esc(c)+'</button>';}).join('')+
+      (hasNone&&cats.length?'<button data-act="sell-cat" data-c="__none" aria-pressed="'+(S.cat==='__none')+'">Other</button>':'')+
+      (hasB?'<button data-act="sell-cat" data-c="__bundles" aria-pressed="'+(S.cat==='__bundles')+'">Bundles</button>':'');
   }
   if(html!==S.catSig){S.catSig=html;bar.innerHTML=html;}
   bar.hidden=!html;
 }
 function inCat(p){
   if(S.cat==='all') return true;
+  if(S.cat==='__bundles') return false;
   if(S.cat==='__none') return !normCat(p.category);
   return sameCat(p.category,S.cat);
+}
+function bundleStats(b){
+  var reg=0, max=Infinity, ok=true;
+  (b.items||[]).forEach(function(x){
+    var p=byId(x.pid);
+    if(!p){ok=false;max=0;return;}
+    reg+=p.priceCents*x.qty; max=Math.min(max,Math.floor((p.stock||0)/x.qty));
+  });
+  if(max===Infinity) max=0;
+  return {regularCents:reg,ok:ok&&max>0,max:max};
+}
+function bundleParts(b){
+  return (b.items||[]).map(function(x){var p=byId(x.pid); return x.qty+' × '+(p?p.name:'(deleted product)');}).join(', ');
 }
 function renderGrid(){
   var g=$('#grid'); if(!g) return;
   renderCatbar();
   var q=S.query.trim().toLowerCase();
-  var sig=JSON.stringify([q,S.cat,S.products.map(function(p){return [p.id,p.name,p.priceCents,p.stock,p.category||'',p.photoId,p.photoData?p.photoData.length:0];})]);
+  var sig=JSON.stringify([q,S.cat,S.bundles,S.products.map(function(p){return [p.id,p.name,p.priceCents,p.stock,p.category||'',p.bogo?1:0,p.photoId,p.photoData?p.photoData.length:0];})]);
   if(sig!==S.gridSig){
     S.gridSig=sig;
     var list=S.products.slice().sort(function(a,b){return a.name.localeCompare(b.name);}).filter(function(p){return inCat(p)&&(!q||p.name.toLowerCase().indexOf(q)>=0);});
+    var bl=(S.cat==='all'||S.cat==='__bundles')?S.bundles.filter(function(b){return !q||b.name.toLowerCase().indexOf(q)>=0;}):[];
     if(!S.products.length){
       g.innerHTML='<div class="empty span-all"><strong>No products yet</strong><span>Add what you sell, with a photo, price and how many you have.</span><button class="btn" data-act="new-product">Add your first product</button></div>';
-    }else if(!list.length){
-      g.innerHTML='<div class="empty span-all"><strong>No match</strong><span>Nothing called "'+esc(S.query.trim())+'".</span></div>';
+    }else if(!list.length&&!bl.length){
+      g.innerHTML='<div class="empty span-all"><strong>No match</strong><span>'+(q?'Nothing called "'+esc(S.query.trim())+'".':'Nothing here yet.')+'</span></div>';
     }else{
-      g.innerHTML=list.map(function(p){
+      g.innerHTML=bl.map(function(b){
+        var st=bundleStats(b);
+        return '<button class="tile bundle" data-act="add" data-id="b:'+esc(b.id)+'"'+(st.ok?'':' disabled')+'>'+
+          picHTML({name:b.name},'','<span class="stk"><span class="chip deal">Bundle</span></span><span class="inc" hidden></span>')+
+          '<span class="meta"><span class="nm">'+esc(b.name)+'</span><span class="pr">'+fmt(b.priceCents)+(st.regularCents>b.priceCents?' <s class="was">'+fmt(st.regularCents)+'</s>':'')+'</span></span></button>';
+      }).join('')+list.map(function(p){
         var out=!(p.stock>0);
         return '<button class="tile" data-act="add" data-id="'+esc(p.id)+'"'+(out?' disabled':'')+'>'+
-          picHTML(p,'','<span class="stk">'+chipFor(p)+'</span><span class="inc" hidden></span>')+
+          picHTML(p,'','<span class="stk">'+(p.bogo&&!out?'<span class="chip deal">Buy 1 Get 1</span> ':'')+chipFor(p)+'</span><span class="inc" hidden></span>')+
           '<span class="meta"><span class="nm">'+esc(p.name)+'</span><span class="pr">'+fmt(p.priceCents)+'</span></span></button>';
       }).join('');
       applyHues(g);
@@ -852,11 +943,12 @@ function updateBadges(){
     if(b){b.hidden=!q;b.textContent=q;}
   });
 }
+function curLines(){return cartLines(S.cart,S.products,S.bundles,S.bogo);}
 function cartCount(){return Object.keys(S.cart).reduce(function(s,k){return s+S.cart[k];},0);}
 function cartChanged(){updateBadges();renderCart();updateCartbar();document.body.classList.toggle('has-bar',S.key==='sell'&&cartCount()>0);}
 function updateCartbar(){
   var bar=$('#cartbar');
-  var lines=cartLines(S.cart,S.products), n=lines.reduce(function(s,l){return s+l.qty;},0);
+  var lines=curLines(), n=lines.reduce(function(s,l){return s+l.qty;},0);
   if(S.key==='sell'&&n>0&&!S.cartOpen){
     bar.hidden=false;
     bar.innerHTML='<button data-act="cart-open"><span>View order · '+n+(n===1?' item':' items')+'</span><strong>'+fmt(cartTotal(lines))+'</strong></button>';
@@ -864,8 +956,8 @@ function updateCartbar(){
 }
 function renderCart(force){
   var el=$('#cart'); if(!el) return;
-  var lines=cartLines(S.cart,S.products), total=cartTotal(lines);
-  var sig=JSON.stringify([lines.map(function(l){var p=byId(l.pid);return [l.pid,l.name,l.priceCents,l.qty,p?p.stock:0];}),S.method,qrSrc().length]);
+  var lines=curLines(), total=cartTotal(lines);
+  var sig=JSON.stringify([lines,lines.map(function(l){return (l.bundle?l.parts.map(function(x){return x.pid;}):[l.pid]).map(function(id){var p=byId(id);return p?p.stock:0;});}),S.method,qrSrc().length]);
   if(force||sig!==S.cartSig){
     S.cartSig=sig;
     keepFocus(function(){el.innerHTML=cartHTML(lines,total);});
@@ -878,8 +970,17 @@ function cartHTML(lines,total){
   var head='<div class="cart-head"><h2>Order</h2><span class="cart-actions">'+(lines.length?'<button class="linkbtn" data-act="clear">Clear</button>':'')+'<button class="x" data-act="cart-close" aria-label="Close order">×</button></span></div>';
   if(!lines.length) return head+'<div class="cartempty">Tap a product to start an order.</div>';
   var h=head+'<ul class="lines">'+lines.map(function(l){
-    return '<li><div class="ln"><span class="nm">'+esc(l.name)+'</span><span class="unit">'+fmt(l.priceCents)+' each</span></div>'+
-      '<div class="qty"><button data-act="dec" data-id="'+esc(l.pid)+'" aria-label="One less '+esc(l.name)+'">−</button><span>'+l.qty+'</span><button data-act="inc" data-id="'+esc(l.pid)+'" aria-label="One more '+esc(l.name)+'">+</button></div>'+
+    var info, extra='';
+    if(l.bundle){
+      info='Bundle · '+fmt(l.priceCents)+' each';
+      extra='<span class="deal">'+esc(l.parts.map(function(x){return x.qty+' × '+x.name;}).join(', '))+(l.regularCents>l.priceCents?' · saves '+fmt((l.regularCents-l.priceCents)*l.qty):'')+'</span>';
+    }else{
+      info=fmt(l.priceCents)+' each';
+      extra=(l.free>0?'<span class="deal">'+l.free+' free (Buy 1 Get 1)</span>':(l.bogo?'<span class="deal">Add 1 more to get 1 free</span>':''))+
+        '<button class="tog" data-act="bogo" data-id="'+esc(l.pid)+'" aria-pressed="'+(!!l.bogo)+'">Buy 1 Get 1 free</button>';
+    }
+    return '<li><div class="ln"><span class="nm">'+esc(l.name)+'</span><span class="unit">'+info+'</span>'+extra+'</div>'+
+      '<div class="qty"><button data-act="dec" data-id="'+esc(l.key)+'" aria-label="One less '+esc(l.name)+'">−</button><span>'+l.qty+'</span><button data-act="inc" data-id="'+esc(l.key)+'" aria-label="One more '+esc(l.name)+'">+</button></div>'+
       '<span class="amt">'+fmt(l.lineCents)+'</span></li>';
   }).join('')+'</ul>';
   h+='<div class="total"><span>Total</span><strong id="total">'+fmt(total)+'</strong></div>';
@@ -899,7 +1000,7 @@ function cartHTML(lines,total){
 }
 function updateTender(){
   var btn=$('#complete'); if(!btn) return;
-  var lines=cartLines(S.cart,S.products), total=cartTotal(lines), ok=false;
+  var lines=curLines(), total=cartTotal(lines), ok=false;
   if(S.method==='cash'){
     var t=parseMoney(S.tender), box=$('#change');
     if(box){
@@ -910,17 +1011,37 @@ function updateTender(){
   }else ok=true;
   btn.disabled=!(ok&&lines.length);
 }
-function addToCart(id){
-  var p=byId(id); if(!p) return;
-  var have=S.cart[id]||0;
-  if(have+1>p.stock){toast(p.stock>0?'Only '+p.stock+' in stock':'Sold out');return;}
-  S.cart[id]=have+1; cartChanged();
+function addToCart(key){
+  var parts;
+  if(key.indexOf('b:')===0){
+    var b=S.bundles.find(function(x){return x.id===key.slice(2);}); if(!b) return;
+    parts=b.items;
+  }else{ if(!byId(key)) return; parts=[{pid:key,qty:1}]; }
+  var used=cartNeeds(curLines());
+  for(var i=0;i<parts.length;i++){
+    var p=byId(parts[i].pid);
+    if(!p){toast('A product in this bundle was deleted');return;}
+    if((used[p.id]||0)+parts[i].qty>p.stock){toast(parts.length>1||key.indexOf('b:')===0?(p.stock>0?'Only '+p.stock+' '+p.name+' in stock':p.name+' is sold out'):(p.stock>0?'Only '+p.stock+' in stock':'Sold out'));return;}
+  }
+  S.cart[key]=(S.cart[key]||0)+1; cartChanged();
+}
+/* drop or trim cart lines whose products or bundles changed */
+function pruneCart(){
+  Object.keys(S.cart).forEach(function(k){
+    var max;
+    if(k.indexOf('b:')===0){
+      var b=S.bundles.find(function(x){return x.id===k.slice(2);});
+      max=b?bundleStats(b).max:0;
+    }else{ var p=byId(k); max=p?p.stock:0; }
+    if(!(max>0)) delete S.cart[k]; else if(S.cart[k]>max) S.cart[k]=max;
+  });
 }
 function completeSale(){
-  var lines=cartLines(S.cart,S.products); if(!lines.length||!dayOpen()) return;
-  for(var i=0;i<lines.length;i++){
-    var p=byId(lines[i].pid);
-    if(!p||p.stock<lines[i].qty){toast('Not enough '+lines[i].name+' in stock');return;}
+  var lines=curLines(); if(!lines.length||!dayOpen()) return;
+  var need=cartNeeds(lines), pids=Object.keys(need);
+  for(var i=0;i<pids.length;i++){
+    var p=byId(pids[i]);
+    if(!p||p.stock<need[pids[i]]){toast('Not enough '+(p?p.name:'stock')+' in stock');return;}
   }
   var total=cartTotal(lines), tendered=total, change=0;
   if(S.method==='cash'){
@@ -931,11 +1052,11 @@ function completeSale(){
   var no=Math.max(S.sales.length,S.lastNo)+1; S.lastNo=no;
   var ref=S.db.collection('sales').doc();
   var sale={dayId:S.meta.dayId,ts:Date.now(),no:no,receiptNo:rno(S.meta.openedAt,no),
-    items:lines.map(function(l){return {pid:l.pid,name:l.name,priceCents:l.priceCents,qty:l.qty};}),
+    items:saleItems(lines),
     totalCents:total,method:S.method,tenderedCents:tendered,changeCents:change,voided:false};
   enqueue('sales/'+ref.id,function(){return ref.set(sale);},'Sale '+sale.receiptNo);
-  lines.forEach(function(l){enqueue('products/'+l.pid,function(){return bump(l.pid,-l.qty);},'Stock for '+l.name);});
-  S.cart={}; S.tender=''; S.cartOpen=false;
+  pids.forEach(function(pid){enqueue('products/'+pid,function(){return bump(pid,-need[pid]);},'Stock for '+byId(pid).name);});
+  S.cart={}; S.bogo={}; S.tender=''; S.cartOpen=false;
   cartChanged(); renderCart(true);
   showReceipt(Object.assign({id:ref.id},sale),true);
 }
@@ -948,13 +1069,13 @@ function voidSale(id){
 
 /* ---------- PRODUCTS ---------- */
 function mountProducts(){
-  V.innerHTML='<div class="pagehead"><h2>Products</h2><button class="btn" data-act="new-product">Add product</button></div><div id="pcatbar" class="filters catbar" hidden></div><div id="plist"></div>';
+  V.innerHTML='<div class="pagehead"><h2>Products</h2><div class="actions"><button class="btn" data-act="new-bundle">Add bundle</button><button class="btn" data-act="new-product">Add product</button></div></div><div id="pcatbar" class="filters catbar" hidden></div><div id="plist"></div>';
   S.pcatSig='';
   updateProducts();
 }
 function productRowHTML(p){
   return '<button class="prow" data-act="edit-product" data-id="'+esc(p.id)+'">'+picHTML(p,'sm')+
-    '<span class="pinfo"><strong>'+esc(p.name)+'</strong><span class="sub mono">'+fmt(p.priceCents)+' · '+p.stock+' in stock</span></span>'+chipFor(p)+'<span class="chev" aria-hidden="true">›</span></button>';
+    '<span class="pinfo"><strong>'+esc(p.name)+'</strong><span class="sub mono">'+fmt(p.priceCents)+' · '+p.stock+' in stock'+(p.bogo?' · Buy 1 Get 1':'')+'</span></span>'+chipFor(p)+'<span class="chev" aria-hidden="true">›</span></button>';
 }
 function updateProducts(){
   var el=$('#plist'); if(!el) return;
@@ -986,6 +1107,14 @@ function updateProducts(){
       return '<h3 class="cathead"><span>'+esc(g.cat||'Other')+'</span><span>'+g.rows.length+'</span></h3>'+g.rows.map(function(r){return productRowHTML(r.p);}).join('');
     }).join('');
   } else html=list.map(productRowHTML).join('');
+  if(S.pcat==='all'&&S.bundles.length){
+    html+='<h3 class="cathead"><span>Bundles</span><span>'+S.bundles.length+'</span></h3>'+S.bundles.map(function(b){
+      var st=bundleStats(b);
+      return '<button class="prow" data-act="edit-bundle" data-id="'+esc(b.id)+'">'+picHTML({name:b.name},'sm')+
+        '<span class="pinfo"><strong>'+esc(b.name)+'</strong><span class="sub mono">'+fmt(b.priceCents)+(st.regularCents>b.priceCents?' (was '+fmt(st.regularCents)+')':'')+' · '+esc(bundleParts(b))+'</span></span>'+
+        (st.ok?'<span class="chip ok">'+st.max+' available</span>':'<span class="chip out">Unavailable</span>')+'<span class="chev" aria-hidden="true">›</span></button>';
+    }).join('');
+  }
   el.innerHTML=html;
   applyHues(el);
 }
@@ -1000,6 +1129,7 @@ function openProduct(id){
     '<div class="field"><label for="ed-cat">Category <span class="hint">(optional: type a new one or tap one below)</span></label><input id="ed-cat" class="text" type="text" maxlength="30" autocomplete="off" placeholder="e.g. Drinks" value="'+esc(p?normCat(p.category):'')+'"><div class="chips catpick" id="ed-cats"></div></div>'+
     '<div class="two"><div class="field"><label for="ed-price">Price</label><div class="money sm"><span>$</span><input id="ed-price" inputmode="decimal" autocomplete="off" placeholder="0.00" value="'+(p?(p.priceCents/100).toFixed(2):'')+'"></div></div>'+
     '<div class="field"><label for="ed-stock">Quantity in stock</label><div class="money sm"><input id="ed-stock" inputmode="numeric" autocomplete="off" placeholder="0" value="'+(p?p.stock:'')+'"></div></div></div>'+
+    '<label class="check"><input type="checkbox" id="ed-bogo"'+(p&&p.bogo?' checked':'')+'><span>Buy 1 get 1 free <span class="hint">(every 2nd one in an order is free)</span></span></label>'+
     '<div class="chips" aria-label="Add stock"><span class="lbl as-center">Add stock</span><button data-m="addstock" data-n="1">+1</button><button data-m="addstock" data-n="5">+5</button><button data-m="addstock" data-n="10">+10</button><button data-m="addstock" data-n="20">+20</button></div>'+
     '<p class="err" id="ed-err" role="alert"></p>'+
     '<div class="row"><button class="cta" data-m="save">Save product</button>'+(p?'<button class="btn danger" data-m="del">Delete</button>':'')+'</div>'+
@@ -1035,6 +1165,7 @@ function saveProduct(){
     delete base.id; delete base.low;
     var doc=Object.assign(base,{name:name,priceCents:price,stock:stock});
     if(cat) doc.category=cat; else delete doc.category;
+    if($('#ed-bogo')&&$('#ed-bogo').checked) doc.bogo=true; else delete doc.bogo;
     if(ph){doc.photoId=ph.id;doc.photoData=ph.data;}
     else if(E.removePhoto){doc.photoId=null;doc.photoData=null;}
     if(doc.photoId==null) delete doc.photoId;
@@ -1046,6 +1177,63 @@ function saveProduct(){
     E.saving=false; btn.disabled=false; btn.textContent='Save product';
     err.textContent='That photo could not be read. Try a different one.';
   });
+}
+/* ---------- bundles ---------- */
+function openBundle(id){
+  var b=id?S.bundles.find(function(x){return x.id===id;}):null, q={};
+  if(b) b.items.forEach(function(x){ if(byId(x.pid)) q[x.pid]=x.qty; });
+  S.ed={bundle:true,id:id||null,q:q,armed:false};
+  M.innerHTML='<div class="overlay"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ed-t">'+
+    '<div class="sheet-head"><h2 id="ed-t">'+(b?'Edit bundle':'New bundle')+'</h2><button class="x" data-m="close" aria-label="Close">×</button></div>'+
+    '<div class="field"><label for="be-name">Bundle name</label><input id="be-name" class="text" type="text" maxlength="60" autocomplete="off" placeholder="e.g. Starter pack" value="'+esc(b?b.name:'')+'"></div>'+
+    '<div class="field"><label>What is in it <span class="hint">(tap + for each item and how many)</span></label><div id="be-list"></div></div>'+
+    '<div class="field"><label for="be-price">Bundle price</label><div class="money sm"><span>$</span><input id="be-price" inputmode="decimal" autocomplete="off" placeholder="0.00" value="'+(b?(b.priceCents/100).toFixed(2):'')+'"></div></div>'+
+    '<p class="sub" id="be-sum"></p><p class="err" id="ed-err" role="alert"></p>'+
+    '<div class="row"><button class="cta" data-m="bsave">Save bundle</button>'+(b?'<button class="btn danger" data-m="bdel">Delete</button>':'')+'</div></div></div>';
+  paintBundleList(); paintBundleSum();
+  setTimeout(function(){var n=$('#be-name'); if(n&&!b) n.focus();},50);
+}
+function paintBundleList(){
+  var el=$('#be-list'); if(!el||!S.ed||!S.ed.bundle) return;
+  el.innerHTML=S.products.slice().sort(function(a,b){return a.name.localeCompare(b.name);}).map(function(p){
+    var n=S.ed.q[p.id]||0;
+    return '<div class="brow'+(n?' on':'')+'"><span class="bn"><strong>'+esc(p.name)+'</strong><span class="sub mono">'+fmt(p.priceCents)+'</span></span>'+
+      '<div class="qty"><button type="button" data-m="bminus" data-id="'+esc(p.id)+'" aria-label="One less '+esc(p.name)+'">−</button><span>'+n+'</span><button type="button" data-m="bplus" data-id="'+esc(p.id)+'" aria-label="One more '+esc(p.name)+'">+</button></div></div>';
+  }).join('')||'<p class="sub">Add some products first.</p>';
+}
+function paintBundleSum(){
+  var el=$('#be-sum'); if(!el||!S.ed||!S.ed.bundle) return;
+  var reg=0, n=0;
+  Object.keys(S.ed.q).forEach(function(pid){var p=byId(pid); if(p){reg+=p.priceCents*S.ed.q[pid]; n+=S.ed.q[pid];}});
+  var pr=parseMoney($('#be-price').value), t=n?n+' items · bought separately '+fmt(reg):'No items picked yet.';
+  if(n&&pr!=null) t+=pr<reg?' · customer saves '+fmt(reg-pr):(pr>reg?' · this costs more than buying separately':' · same as buying separately');
+  el.textContent=t;
+}
+function saveBundle(){
+  var E=S.ed; if(!E||!E.bundle) return;
+  var name=$('#be-name').value.trim(), price=parseMoney($('#be-price').value), err=$('#ed-err');
+  var items=Object.keys(E.q).filter(function(k){return E.q[k]>0&&byId(k);}).map(function(k){return {pid:k,qty:E.q[k]};});
+  var units=items.reduce(function(a,x){return a+x.qty;},0);
+  if(!name){err.textContent='Give the bundle a name.';return;}
+  if(units<2){err.textContent='A bundle needs at least 2 items. Tap + next to the products.';return;}
+  if(price==null){err.textContent='Enter the bundle price as a dollar amount, like 12.00.';return;}
+  var nb={id:E.id||('b'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),name:name,priceCents:price,items:items};
+  var list=S.bundles.slice(), at=list.findIndex(function(x){return x.id===nb.id;});
+  if(at>=0) list[at]=nb; else list.push(nb);
+  storeBundles(list); closeModal(); toast((E.id?'Saved ':'Added ')+name);
+}
+function deleteBundle(){
+  var E=S.ed; if(!E||!E.bundle||!E.id) return;
+  var btn=$('[data-m="bdel"]');
+  if(!E.armed){E.armed=true;btn.classList.add('armed');btn.textContent='Tap again to delete';return;}
+  var id=E.id; delete S.cart['b:'+id];
+  storeBundles(S.bundles.filter(function(x){return x.id!==id;}));
+  closeModal(); cartChanged(); toast('Bundle deleted');
+}
+function storeBundles(list){
+  S.bundles=list;
+  enqueue('meta/bundles',function(){return S.db.doc('meta/bundles').set({list:list});},'Bundles');
+  refresh();
 }
 function deleteProduct(){
   var E=S.ed; if(!E||!E.id) return;
@@ -1396,7 +1584,7 @@ function qrBlockHTML(sl){
   return '<div class="qrbox"><div class="qrimg" id="rc-qr">'+svg+'</div><p><strong>Customer scans for the PDF receipt</strong><span class="sub">It opens on their phone. They tap Download PDF.</span></p></div>';
 }
 function receiptPaperHTML(sl){
-  var rows=sl.items.map(function(it){return '<div class="r"><span>'+it.qty+' × '+esc(it.name)+'</span><span>'+fmt(it.priceCents*it.qty)+'</span></div>';}).join('');
+  var rows=sl.items.map(function(it){return '<div class="r"><span>'+it.qty+' × '+esc(itemLabel(it))+(it.bundle?'<small class="bnote">in '+esc(it.bundle)+'</small>':'')+'</span><span>'+fmt(it.priceCents*it.qty)+'</span></div>';}).join('');
   var pay=sl.method==='cash'?
     '<div class="r"><span>Cash</span><span>'+fmt(sl.tenderedCents)+'</span></div><div class="r big"><span>Change</span><span>'+fmt(sl.changeCents)+'</span></div>':
     '<div class="r"><span>Paid by</span><span>PayNow</span></div>';
@@ -1471,7 +1659,10 @@ document.addEventListener('click',function(e){
     case 'add': addToCart(id); break;
     case 'inc': addToCart(id); break;
     case 'dec': if(S.cart[id]>1) S.cart[id]--; else delete S.cart[id]; cartChanged(); break;
-    case 'clear': S.cart={}; S.tender=''; cartChanged(); break;
+    case 'clear': S.cart={}; S.bogo={}; S.tender=''; cartChanged(); break;
+    case 'bogo': var bp=byId(id); if(bp){S.bogo[id]=!bogoOn(bp,S.bogo); cartChanged();} break;
+    case 'new-bundle': openBundle(null); break;
+    case 'edit-bundle': openBundle(id); break;
     case 'method': S.method=t.dataset.m; renderCart(); break;
     case 'tender': S.tender=(Number(t.dataset.v)/100).toFixed(2); var ti=$('#tender'); if(ti) ti.value=S.tender; updateTender(); break;
     case 'complete': completeSale(); break;
@@ -1519,6 +1710,9 @@ function onModal(m){
   if(a==='dl-day-pdf'){exportDayPdf(S.lastDay);return;}
   if(a==='cat'){var ci=$('#ed-cat'); if(ci){ci.value=m.dataset.c; paintCatPick();} return;}
   if(a==='addstock'){var si=$('#ed-stock'); var cur=parseCount(si.value)||0; si.value=cur+Number(m.dataset.n); return;}
+  if(a==='bplus'||a==='bminus'){var BE=S.ed; if(BE&&BE.bundle){var n=(BE.q[m.dataset.id]||0)+(a==='bplus'?1:-1); if(n<=0) delete BE.q[m.dataset.id]; else BE.q[m.dataset.id]=Math.min(n,99); paintBundleList(); paintBundleSum();} return;}
+  if(a==='bsave') return saveBundle();
+  if(a==='bdel') return deleteBundle();
   if(a==='save') return saveProduct();
   if(a==='del') return deleteProduct();
   if(a==='save-settings') return saveSettings();
@@ -1538,6 +1732,7 @@ document.addEventListener('input',function(e){
   else if(id==='tender'){S.tender=e.target.value;updateTender();}
   else if(id==='counted'){S.counted=e.target.value;if(dayOpen())updateVariance(daySummary(S.sales,S.meta.floatCents));}
   else if(id==='ed-cat'){paintCatPick();}
+  else if(id==='be-price'){paintBundleSum();}
 });
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'&&M.firstChild) closeModal();
@@ -1574,6 +1769,9 @@ function subSales(){
 function subscribe(){
   var db=S.db;
   listen(db.doc('meta/shop'),function(snap){S.shop=snap.exists?Object.assign({},snap.data()):{};note(snap);refresh();},onErr);
+  db.doc('meta/bundles').onSnapshot(function(snap){
+    var d=snap.exists?snap.data():null; S.bundles=d&&Array.isArray(d.list)?d.list:[]; note(snap); pruneCart(); refresh();
+  },onErr);
   listen(db.doc('meta/day'),function(snap){
     S.meta=snap.exists?Object.assign({},snap.data()):null; S.got.meta=true; note(snap);
     var want=dayOpen()?S.meta.dayId:null;
@@ -1583,7 +1781,7 @@ function subscribe(){
   listen(db.collection('products'),function(snap){
     S.products=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
     S.got.products=true; note(snap);
-    if(S.cart) Object.keys(S.cart).forEach(function(k){var p=byId(k); if(!p) delete S.cart[k]; else if(S.cart[k]>p.stock){ if(p.stock>0) S.cart[k]=p.stock; else delete S.cart[k]; }});
+    pruneCart();
     refresh();
   },onErr);
   listen(db.collection('days').orderBy('closedAt','desc').limit(60),function(snap){
