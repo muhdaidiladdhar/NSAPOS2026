@@ -319,6 +319,10 @@ details.day strong{font:500 17px var(--font-mono)}
 .chrome[hidden]{display:none}
 .catbar{margin-bottom:12px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
 .catbar[hidden]{display:none}
+.subrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.locchip{padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font:700 12px var(--font-ui);color:var(--ink)}
+.locopt{width:100%;margin-top:10px}
+.xrow{display:grid;gap:2px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);margin-bottom:8px}
 .chip.deal{background:var(--accent);color:var(--accent-ink)}
 .tile .stk{display:flex;gap:4px;flex-wrap:wrap;right:8px}
 .tile .stk .chip.deal{background:var(--accent);color:var(--accent-ink)}
@@ -360,7 +364,7 @@ details.day strong{font:500 17px var(--font-mono)}
 <div class="wrap" id="app">
   <div class="chrome" id="chrome">
     <div class="topbar">
-      <div class="brand"><h1 id="shopname">NSA POS 2026</h1><span class="daychip" id="daychip">Loading</span></div>
+      <div class="brand"><h1 id="shopname">NSA POS 2026</h1><div class="subrow"><button class="locchip" id="locbtn" data-act="change-loc" aria-label="Change location" hidden></button><span class="daychip" id="daychip">Loading</span></div></div>
       <div class="topright">
         <span class="saving" id="saving" hidden>Saving…</span>
         <div class="drawer" id="drawer" hidden></div>
@@ -598,10 +602,12 @@ function padRow(l,r,w){
   if(l.length>room) l=l.slice(0,Math.max(0,room-1))+'…';
   return l+' '.repeat(Math.max(1,w-l.length-r.length))+r;
 }
+function locLabel(id){var n={bft:'Outside BFT',wb:'Whitebox'}[id]; return n||'';}
 function receiptText(shop,s){
   var W=32,L=[];
   L.push((shop||'Receipt').toUpperCase());
   L.push(dt(s.ts)+', '+tm(s.ts));
+  if(s.loc) L.push(locLabel(s.loc));
   L.push('No. '+s.receiptNo);
   L.push('-'.repeat(W));
   s.items.forEach(function(it){L.push(padRow(it.qty+' x '+itemLabel(it),fmt(it.priceCents*it.qty),W)); if(it.bundle) L.push('   in '+it.bundle);});
@@ -615,7 +621,7 @@ function receiptText(shop,s){
 }
 function reportText(shop,d){
   var W=32,L=[];
-  L.push((shop||'Shop')+' - daily report');
+  L.push((shop||'Shop')+' - daily report'+(d.locLabel?' ('+d.locLabel+')':''));
   L.push(dt(d.openedAt));
   L.push('-'.repeat(W));
   L.push(padRow('Sales',String(d.salesCount),W));
@@ -651,8 +657,8 @@ function reportText(shop,d){
   }
   return L.join('\n');
 }
-function stockText(shop,products,ts){
-  var L=[(shop||'Shop')+' - stock list', dt(ts)+', '+tm(ts), '--------------------------------'];
+function stockText(shop,products,ts,loc){
+  var L=[(shop||'Shop')+' - stock list'+(loc?' ('+loc+')':''), dt(ts)+', '+tm(ts), '--------------------------------'];
   products.slice().sort(function(a,b){return a.name.localeCompare(b.name);}).forEach(function(p){
     L.push(padRow(p.name,p.stock+(stockStatus(p)==='out'?' OUT':''),32));
   });
@@ -667,7 +673,7 @@ var S={
   meta:null,shop:{},products:[],sales:[],days:[],
   salesFor:undefined,unsubSales:null,
   tab:'sell',rv:'today',sf:'all',cat:'all',catSig:'',staff:false,pcat:'all',pcatSig:'',
-  cart:{},bundles:[],bogo:{},be:null,method:'cash',tender:'',query:'',cartOpen:false,
+  cart:{},bundles:[],bogo:{},be:null,loc:null,raw:[],allDays:[],transfers:[],unsubLoc:null,method:'cash',tender:'',query:'',cartOpen:false,
   counted:'',closeAsk:false,voidAsk:null,openDays:new Set(),
   key:null,cartSig:'',gridSig:'',lastNo:0,
   confirmed:false,slow:false,pending:0,qs:new Map(),
@@ -684,6 +690,19 @@ function photoSrc(o,idKey,dataKey){return o[idKey]?'/_blob/'+o[idKey]:(o[dataKey
 function pSrc(p){return photoSrc(p,'photoId','photoData');}
 function qrSrc(){return photoSrc(S.shop,'qrId','qrData');}
 function shopName(){return 'Strings & Things';}
+/* two selling locations; each has its own stock count, till (day) and reports */
+var LOCS=[{id:'bft',name:'Outside BFT',short:'BFT',field:'stock',dayDoc:'meta/day'},{id:'wb',name:'Whitebox',short:'Whitebox',field:'stockWb',dayDoc:'meta/dayWb'}];
+function locInfo(id){for(var i=0;i<LOCS.length;i++) if(LOCS[i].id===id) return LOCS[i]; return null;}
+function locName(id){var l=locInfo(id||'bft'); return l?l.name:'';}
+function locShort(id){var l=locInfo(id||'bft'); return l?l.short:'';}
+/* p.stock = what is at the location you are in; p._bft and p._wb are the two real counts */
+function deriveProducts(){
+  var f=(locInfo(S.loc)||LOCS[0]).field;
+  S.products=S.raw.map(function(d){return Object.assign({},d,{stock:d[f]||0,_bft:d.stock||0,_wb:d.stockWb||0});});
+}
+function rawOf(p){var d=Object.assign({},p); delete d.id; delete d._bft; delete d._wb; d.stock=p._bft||0; d.stockWb=p._wb||0; return d;}
+function stockAt(p,loc){return loc==='wb'?(p._wb||0):(p._bft||0);}
+function filterDays(){S.allDays=S.allDays||[]; S.days=S.allDays.filter(function(d){return (d.loc||'bft')===S.loc;});}
 
 var ICON={
   sell:'<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1 12H6z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg>',
@@ -733,9 +752,11 @@ function enqueue(key,job,label){
   S.qs.set(key,p);
   return p;
 }
-function bump(pid,delta){
+function bump(pid,delta,loc){
   var p=byId(pid); if(!p) return Promise.resolve();
-  return S.db.doc('products/'+pid).update({stock:applyDelta(p.stock,delta)});
+  var l=locInfo(loc||S.loc)||LOCS[0], u={};
+  u[l.field]=applyDelta(stockAt(p,l.id),delta);
+  return S.db.doc('products/'+pid).update(u);
 }
 
 /* ---------- photos ---------- */
@@ -770,8 +791,10 @@ function storePhoto(file,opt){
 /* ---------- chrome ---------- */
 function updateChrome(){
   $('#shopname').textContent=shopName()||'NSA POS 2026';
-  var chip=$('#daychip');
+  var chip=$('#daychip'), lb=$('#locbtn');
+  if(lb){lb.hidden=!S.loc; lb.textContent=S.loc?locName(S.loc)+' ▾':'';}
   if(S.authReady&&!S.user){chip.textContent='Signed out';chip.className='daychip';}
+  else if(!S.loc){chip.textContent='Choose location';chip.className='daychip';}
   else if(!S.got.meta){chip.textContent='Loading';chip.className='daychip';}
   else if(dayOpen()){chip.textContent='Open since '+tm(S.meta.openedAt);chip.className='daychip on';}
   else{chip.textContent='Till closed';chip.className='daychip';}
@@ -786,7 +809,7 @@ function updateChrome(){
     b.hidden=false;
     b.textContent=S.persist?"You're offline. Sales are kept on this device and will sync when you're back online.":"Can't reach the database. Keep this page open until you're back online.";
   }else b.hidden=true;
-  $('#tabs').hidden=!S.user; $('#gear').hidden=!S.user; $('#logout').hidden=!S.user;
+  $('#tabs').hidden=!S.user||!S.loc; $('#gear').hidden=!S.user; $('#logout').hidden=!S.user;
   [].forEach.call(document.querySelectorAll('#tabs [data-tab]'),function(b){b.hidden=!!S.staff&&b.dataset.tab==='products';});
   $$('.tab').forEach(function(t){t.setAttribute('aria-selected',String(t.dataset.tab===S.tab));});
   fitChrome();
@@ -802,6 +825,7 @@ function viewKey(){
   if(!S.authReady) return 'loading';
   if(!S.user) return 'signin';
   if(S.denied) return 'denied';
+  if(!S.loc) return 'pickloc';
   if(!S.got.meta||!S.got.products) return 'loading';
   var open=dayOpen();
   if(S.tab==='sell') return open?'sell':'gate-sell';
@@ -821,6 +845,7 @@ function mountView(k){
   if(k==='nodb'){V.innerHTML='<div class="empty"><strong>Could not load the database</strong><span>Check your internet connection and reload the page.</span></div>';return;}
   if(k==='signin'){V.innerHTML=signinHTML();return;}
   if(k==='denied'){V.innerHTML='<div class="empty"><strong>This account cannot use this POS</strong><span>Sign in with the account you added to the database rules, or check the rules in Firebase.</span><button class="btn" data-act="signout">Sign out</button></div>';return;}
+  if(k==='pickloc'){V.innerHTML=pickLocHTML();return;}
   if(k==='loading'){V.innerHTML='<div class="empty"><strong>Loading your till</strong><span>Fetching products and today\'s sales.</span></div>';return;}
   if(k==='sell') return mountSell();
   if(k==='gate-sell'){V.innerHTML=gateHTML();return;}
@@ -838,6 +863,38 @@ function updateView(k){
   if(k==='report:past') return updatePast();
 }
 
+/* ---------- location ---------- */
+function pickLocHTML(){
+  return '<section class="gate card"><h2>Choose location</h2><p class="lede">Where are you selling from? Each location has its own stock, till and end-of-day report.</p>'+
+    LOCS.map(function(l){return '<button class="cta locopt" data-act="pick-loc" data-l="'+l.id+'">'+esc(l.name)+'</button>';}).join('')+'</section>';
+}
+function openLocSheet(){
+  M.innerHTML='<div class="overlay"><div class="sheet" role="dialog" aria-modal="true" aria-label="Location">'+
+    '<div class="sheet-head"><h2>Location</h2><button class="x" data-m="close" aria-label="Close">×</button></div>'+
+    '<p class="sub">Switching clears the order you have open.</p>'+
+    LOCS.map(function(l){return '<button class="'+(l.id===S.loc?'cta':'btn')+' locopt" data-m="pick-loc" data-l="'+l.id+'">'+esc(l.name)+(l.id===S.loc?' (here now)':'')+'</button>';}).join('')+'</div></div>';
+}
+function setLoc(id){
+  if(!locInfo(id)) return;
+  S.loc=id; try{sessionStorage.setItem('nsapos-loc',id);}catch(e){}
+  closeModal();
+  S.cart={}; S.bogo={}; S.tender=''; S.cartOpen=false; S.counted=''; S.closeAsk=false; S.voidAsk=null; S.lastNo=0; S.rv='today';
+  S.key=null; S.gridSig=''; S.cartSig=''; S.catSig=''; S.pcatSig=''; S.openDays=new Set();
+  deriveProducts(); filterDays(); subLoc(); refresh();
+}
+function subLoc(){
+  if(S.unsubLoc){try{S.unsubLoc();}catch(e){} S.unsubLoc=null;}
+  if(S.unsubSales){try{S.unsubSales();}catch(e){} S.unsubSales=null;}
+  S.salesFor=undefined; S.sales=[]; S.meta=null; S.got.meta=false;
+  if(!S.loc||!S.db) return;
+  S.unsubLoc=S.db.doc(locInfo(S.loc).dayDoc).onSnapshot(function(snap){
+    S.meta=snap.exists?Object.assign({},snap.data()):null; S.got.meta=true; note(snap);
+    var want=dayOpen()?S.meta.dayId:null;
+    if(want!==S.salesFor) subSales();
+    refresh();
+  },onErr);
+}
+
 /* ---------- open the till ---------- */
 function gateHTML(){
   var last=(S.meta&&S.meta.floatCents!=null)?S.meta.floatCents:10000;
@@ -852,7 +909,8 @@ function openDay(){
   if(f==null){$('#ot-err').textContent='Enter the petty cash as a dollar amount, like 100.00.';return;}
   var doc={dayId:'d'+Date.now(),status:'open',floatCents:f,openedAt:Date.now()};
   S.lastNo=0; S.counted=''; S.closeAsk=false;
-  enqueue('meta/day',function(){return S.db.doc('meta/day').set(doc);},'Opening the till');
+  doc.loc=S.loc; var dpath=locInfo(S.loc).dayDoc;
+  enqueue(dpath,function(){return S.db.doc(dpath).set(doc);},'Opening the till');
   toast('Till open with '+fmt(f)+' petty cash');
 }
 
@@ -1053,9 +1111,10 @@ function completeSale(){
   var ref=S.db.collection('sales').doc();
   var sale={dayId:S.meta.dayId,ts:Date.now(),no:no,receiptNo:rno(S.meta.openedAt,no),
     items:saleItems(lines),
-    totalCents:total,method:S.method,tenderedCents:tendered,changeCents:change,voided:false};
+    totalCents:total,method:S.method,tenderedCents:tendered,changeCents:change,voided:false,loc:S.loc};
   enqueue('sales/'+ref.id,function(){return ref.set(sale);},'Sale '+sale.receiptNo);
-  pids.forEach(function(pid){enqueue('products/'+pid,function(){return bump(pid,-need[pid]);},'Stock for '+byId(pid).name);});
+  var L=S.loc;
+  pids.forEach(function(pid){enqueue('products/'+pid,function(){return bump(pid,-need[pid],L);},'Stock for '+byId(pid).name);});
   S.cart={}; S.bogo={}; S.tender=''; S.cartOpen=false;
   cartChanged(); renderCart(true);
   showReceipt(Object.assign({id:ref.id},sale),true);
@@ -1063,7 +1122,8 @@ function completeSale(){
 function voidSale(id){
   var s=S.sales.find(function(x){return x.id===id;}); if(!s||s.voided) return;
   enqueue('sales/'+id,function(){return S.db.doc('sales/'+id).update({voided:true,voidedAt:Date.now()});},'Void');
-  s.items.forEach(function(it){ if(it.pid) enqueue('products/'+it.pid,function(){return bump(it.pid,it.qty);},'Stock for '+it.name); });
+  var L=s.loc||S.loc;
+  s.items.forEach(function(it){ if(it.pid) enqueue('products/'+it.pid,function(){return bump(it.pid,it.qty,L);},'Stock for '+it.name); });
   S.voidAsk=null; toast('Sale voided. Stock put back.');
 }
 
@@ -1128,7 +1188,7 @@ function openProduct(id){
     '<div class="field"><label for="ed-name">Name</label><input id="ed-name" class="text" type="text" maxlength="60" autocomplete="off" value="'+esc(p?p.name:'')+'"></div>'+
     '<div class="field"><label for="ed-cat">Category <span class="hint">(optional: type a new one or tap one below)</span></label><input id="ed-cat" class="text" type="text" maxlength="30" autocomplete="off" placeholder="e.g. Drinks" value="'+esc(p?normCat(p.category):'')+'"><div class="chips catpick" id="ed-cats"></div></div>'+
     '<div class="two"><div class="field"><label for="ed-price">Price</label><div class="money sm"><span>$</span><input id="ed-price" inputmode="decimal" autocomplete="off" placeholder="0.00" value="'+(p?(p.priceCents/100).toFixed(2):'')+'"></div></div>'+
-    '<div class="field"><label for="ed-stock">Quantity in stock</label><div class="money sm"><input id="ed-stock" inputmode="numeric" autocomplete="off" placeholder="0" value="'+(p?p.stock:'')+'"></div></div></div>'+
+    '<div class="field"><label for="ed-stock">Quantity in stock <span class="hint">('+esc(locName(S.loc))+')</span></label><div class="money sm"><input id="ed-stock" inputmode="numeric" autocomplete="off" placeholder="0" value="'+(p?p.stock:'')+'"></div></div></div>'+
     '<label class="check"><input type="checkbox" id="ed-bogo"'+(p&&p.bogo?' checked':'')+'><span>Buy 1 get 1 free <span class="hint">(every 2nd one in an order is free)</span></span></label>'+
     '<div class="chips" aria-label="Add stock"><span class="lbl as-center">Add stock</span><button data-m="addstock" data-n="1">+1</button><button data-m="addstock" data-n="5">+5</button><button data-m="addstock" data-n="10">+10</button><button data-m="addstock" data-n="20">+20</button></div>'+
     '<p class="err" id="ed-err" role="alert"></p>'+
@@ -1161,9 +1221,9 @@ function saveProduct(){
   E.saving=true; var btn=$('[data-m="save"]'); btn.disabled=true; btn.textContent='Saving…';
   var photoStep=E.file?storePhoto(E.file,{max:640,mime:'image/jpeg',fallbackMax:400}):Promise.resolve(null);
   photoStep.then(function(ph){
-    var base=E.orig?Object.assign({},E.orig):{createdAt:Date.now()};
+    var base=E.orig?rawOf(E.orig):{createdAt:Date.now(),stock:0,stockWb:0};
     delete base.id; delete base.low;
-    var doc=Object.assign(base,{name:name,priceCents:price,stock:stock});
+    var doc=Object.assign(base,{name:name,priceCents:price}); doc[locInfo(S.loc).field]=stock;
     if(cat) doc.category=cat; else delete doc.category;
     if($('#ed-bogo')&&$('#ed-bogo').checked) doc.bogo=true; else delete doc.bogo;
     if(ph){doc.photoId=ph.id;doc.photoData=ph.data;}
@@ -1247,14 +1307,15 @@ function deleteProduct(){
 
 /* ---------- STOCK ---------- */
 function mountStock(){
-  V.innerHTML='<div class="pagehead"><h2>Stock</h2><div class="actions"><button class="btn" data-act="copy-stock">Copy list</button><button class="btn" data-act="export-stock-xlsx">Excel</button><button class="btn" data-act="export-stock-pdf">PDF</button></div></div>'+
+  V.innerHTML='<div class="pagehead"><h2>Stock</h2><div class="actions">'+(S.staff?'':'<button class="btn" data-act="transfer">Transfer stock</button>')+'<button class="btn" data-act="copy-stock">Copy list</button><button class="btn" data-act="export-stock-xlsx">Excel</button><button class="btn" data-act="export-stock-pdf">PDF</button></div></div>'+
     '<div class="stats" id="s-stats"></div>'+
     '<div class="subhead mt16"><div class="filters" id="s-filters"></div></div>'+
-    '<div id="s-table"></div>';
+    '<div id="s-table"></div><div id="s-xfers"></div>';
   updateStock();
   loadLib('pdf').catch(function(){}); loadLib('xlsx').catch(function(){});
 }
 function updateStock(){
+  renderXfers();
   var sold=soldByProduct(S.sales), prods=S.products;
   var units=0,value=0,out=0;
   prods.forEach(function(p){units+=p.stock;value+=p.stock*p.priceCents;if(stockStatus(p)==='out')out++;});
@@ -1286,7 +1347,7 @@ function exportDayXlsx(d){
   toast('Preparing Excel file…');
   loadLib('xlsx').then(function(X){
     var money=function(c){return {v:(c||0)/100,t:'n',z:'$#,##0.00'};}, diff=dayDiff(d);
-    var sum=[[shopName()+' - end of day report'],[dayRange(d)],[],
+    var sum=[[shopName()+' - end of day report ('+locName(d.loc)+')'],[dayRange(d)],[],
       ['Sales',''],['Total sales',money(d.revenueCents)],['Sales made',d.salesCount],['Voided sales',d.voidedCount||0],['Items sold',d.units],
       ['Cash sales',money(d.cashCents)],['PayNow sales',money(d.paynowCents)],[],
       ['Petty cash',''],['Opening petty cash',money(d.floatCents)],['Cash sales',money(d.cashCents)],
@@ -1317,7 +1378,7 @@ function exportDayPdf(d){
   toast('Preparing PDF…');
   loadLib('pdf').then(function(J){
     var doc=new J({unit:'mm',format:'a4'}), diff=dayDiff(d), items=d.items||[], q=0,c=0,l=0;
-    doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(shopName()+' - end of day report',14,18);
+    doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(shopName()+' - end of day report ('+locName(d.loc)+')',14,18);
     doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110); doc.text(dayRange(d),14,24); doc.setTextColor(0);
     var y=pdfTable(doc,{y0:34,heading:'Summary',cols:[{h:'',w:122},{h:'',w:60,a:'r'}],rows:[
       ['Total sales',fmt(d.revenueCents)],
@@ -1355,6 +1416,55 @@ function showDayClosed(d){
     '<div class="row"><button class="btn" data-m="dl-day-xlsx">Download Excel</button><button class="btn" data-m="dl-day-pdf">Download PDF</button></div>'+
     '<div class="row"><button class="cta" data-m="close">Done</button></div></div></div>';
 }
+function renderXfers(){
+  var el=$('#s-xfers'); if(!el) return;
+  if(!S.transfers.length){el.innerHTML='';return;}
+  el.innerHTML='<h3 class="cathead"><span>Recent transfers</span><span>'+Math.min(S.transfers.length,10)+'</span></h3>'+S.transfers.slice(0,10).map(function(t){
+    return '<div class="xrow"><strong>'+esc(locShort(t.from))+' → '+esc(locShort(t.to))+'</strong><span class="sub">'+dt(t.ts)+', '+tm(t.ts)+(t.by?' · '+esc(t.by):'')+'</span><span class="sub">'+t.items.map(function(i){return i.qty+' × '+esc(i.name);}).join(', ')+'</span></div>';
+  }).join('');
+}
+function openTransfer(){
+  if(S.staff) return;
+  S.ed={xfer:true,from:S.loc==='wb'?'wb':'bft',q:{}};
+  M.innerHTML='<div class="overlay"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ed-t">'+
+    '<div class="sheet-head"><h2 id="ed-t">Transfer stock</h2><button class="x" data-m="close" aria-label="Close">×</button></div>'+
+    '<div class="filters" id="xf-dir"></div><p class="sub">Tap + for each product and how many to move.</p><div id="xf-list"></div>'+
+    '<p class="sub" id="xf-sum"></p><p class="err" id="ed-err" role="alert"></p>'+
+    '<div class="row"><button class="cta" data-m="xgo">Transfer</button></div></div></div>';
+  paintTransfer();
+}
+function paintTransfer(){
+  var E=S.ed; if(!E||!E.xfer||!$('#xf-list')) return;
+  var to=E.from==='bft'?'wb':'bft', units=0;
+  $('#xf-dir').innerHTML=LOCS.map(function(l){var o=l.id==='bft'?'wb':'bft'; return '<button data-m="xdir" data-l="'+l.id+'" aria-pressed="'+(E.from===l.id)+'">'+esc(l.short)+' → '+esc(locShort(o))+'</button>';}).join('');
+  $('#xf-list').innerHTML=S.products.slice().sort(function(a,b){return a.name.localeCompare(b.name);}).map(function(p){
+    var have=stockAt(p,E.from), n=Math.min(E.q[p.id]||0,have); units+=n;
+    return '<div class="brow'+(n?' on':'')+'"><span class="bn"><strong>'+esc(p.name)+'</strong><span class="sub mono">'+esc(locShort(E.from))+' '+have+' · '+esc(locShort(to))+' '+stockAt(p,to)+'</span></span>'+
+      '<div class="qty"><button type="button" data-m="xminus" data-id="'+esc(p.id)+'" aria-label="One less '+esc(p.name)+'">−</button><span>'+n+'</span><button type="button" data-m="xplus" data-id="'+esc(p.id)+'"'+(n>=have?' disabled':'')+' aria-label="One more '+esc(p.name)+'">+</button></div></div>';
+  }).join('')||'<p class="sub">No products yet.</p>';
+  $('#xf-sum').textContent=units?'Moving '+units+(units===1?' item':' items')+' from '+locName(E.from)+' to '+locName(to)+'.':'';
+}
+function doTransfer(){
+  var E=S.ed; if(!E||!E.xfer||S.staff) return;
+  var from=E.from, to=from==='bft'?'wb':'bft', items=[];
+  Object.keys(E.q).forEach(function(pid){
+    var p=byId(pid), n=p?Math.min(E.q[pid],stockAt(p,from)):0;
+    if(p&&n>0) items.push({pid:pid,name:p.name,qty:n});
+  });
+  if(!items.length){$('#ed-err').textContent='Tap + next to the products you are moving.';return;}
+  items.forEach(function(it){
+    enqueue('products/'+it.pid,function(){
+      var p=byId(it.pid); if(!p) return Promise.resolve();
+      var bft=p._bft, wb=p._wb;
+      if(from==='bft'){var m1=Math.min(it.qty,bft); bft-=m1; wb+=m1;} else {var m2=Math.min(it.qty,wb); wb-=m2; bft+=m2;}
+      return S.db.doc('products/'+it.pid).update({stock:bft,stockWb:wb});
+    },'Stock for '+it.name);
+  });
+  var ref=S.db.collection('transfers').doc(), units=items.reduce(function(a,i){return a+i.qty;},0);
+  var by=((S.user&&S.user.email)||'').replace(/@nsapos\.app$/,'');
+  enqueue('transfers/'+ref.id,function(){return ref.set({ts:Date.now(),from:from,to:to,items:items,by:by});},'Transfer log');
+  closeModal(); toast('Moved '+units+(units===1?' item':' items')+' to '+locName(to));
+}
 function stockTotals(rows){
   return rows.reduce(function(t,r){t.units+=r.stock;t.sold+=r.sold;t.value+=r.valueCents;return t;},{units:0,sold:0,value:0});
 }
@@ -1363,7 +1473,7 @@ function exportStockXlsx(){
   loadLib('xlsx').then(function(X){
     var rows=stockRows(S.products,soldByProduct(S.sales)), tot=stockTotals(rows), now=Date.now();
     var money=function(c){return {v:c/100,t:'n',z:'$#,##0.00'};};
-    var aoa=[[shopName()+' - stock list'],[dt(now)+', '+tm(now)],[],['Product','Category','Price','In stock','Sold today','Stock value']];
+    var aoa=[[shopName()+' - stock list ('+locName(S.loc)+')'],[dt(now)+', '+tm(now)],[],['Product','Category','Price','In stock','Sold today','Stock value']];
     rows.forEach(function(r){aoa.push([r.name,r.category,money(r.priceCents),r.stock,r.sold,money(r.valueCents)]);});
     aoa.push([]); aoa.push(['Total','','',tot.units,tot.sold,money(tot.value)]);
     var ws=X.utils.aoa_to_sheet(aoa);
@@ -1378,7 +1488,7 @@ function exportStockPdf(){
   loadLib('pdf').then(function(J){
     var rows=stockRows(S.products,soldByProduct(S.sales)), tot=stockTotals(rows), now=Date.now();
     var doc=new J({unit:'mm',format:'a4'});
-    pdfTable(doc,{title:shopName()+' - stock list',subtitle:dt(now)+', '+tm(now),
+    pdfTable(doc,{title:shopName()+' - stock list ('+locName(S.loc)+')',subtitle:dt(now)+', '+tm(now),
       cols:[{h:'Product',w:58},{h:'Category',w:36},{h:'Price',w:24,a:'r'},{h:'In stock',w:20,a:'r'},{h:'Sold today',w:20,a:'r'},{h:'Stock value',w:24,a:'r'}],
       rows:rows.map(function(r){return [r.name,r.category||'-',fmt(r.priceCents),String(r.stock),String(r.sold),fmt(r.valueCents)];}),
       foot:['Total','','',String(tot.units),String(tot.sold),fmt(tot.value)]});
@@ -1459,7 +1569,7 @@ function updateCloseBox(){
 }
 function dayDoc(counted){
   var m=S.meta, sum=daySummary(S.sales,m.floatCents);
-  return {openedAt:m.openedAt,closedAt:Date.now(),floatCents:m.floatCents,salesCount:sum.count,voidedCount:sum.voided,units:sum.units,
+  return {loc:S.loc,openedAt:m.openedAt,closedAt:Date.now(),floatCents:m.floatCents,salesCount:sum.count,voidedCount:sum.voided,units:sum.units,
     revenueCents:sum.revenueCents,cashCents:sum.cashCents,paynowCents:sum.paynowCents,expectedCashCents:sum.expectedCashCents,
     countedCents:counted,varianceCents:counted==null?null:counted-sum.expectedCashCents,items:itemsSummary(S.sales,S.products),
     stock:S.products.map(function(p){return {name:p.name,stock:p.stock};}),
@@ -1471,7 +1581,8 @@ function closeDay(){
   if(!dayOpen()) return;
   var counted=parseMoney(S.counted), id=S.meta.dayId, doc=dayDoc(counted);
   enqueue('days/'+id,function(){return S.db.doc('days/'+id).set(doc);},'Day report');
-  enqueue('meta/day',function(){return S.db.doc('meta/day').update({status:'closed',closedAt:doc.closedAt});},'Closing the day');
+  var cpath=locInfo(S.loc).dayDoc;
+  enqueue(cpath,function(){return S.db.doc(cpath).update({status:'closed',closedAt:doc.closedAt});},'Closing the day');
   S.closeAsk=false; S.counted=''; S.rv='past'; S.openDays.add(id);
   toast('Day closed. Report saved.');
   showDayClosed(doc);
@@ -1561,7 +1672,7 @@ function downloadReceiptPdf(sl){
     var doc=new J({unit:'mm',format:[80,H]});
     doc.setFont('courier','normal'); doc.setFontSize(9);
     lines.forEach(function(l,i){
-      var y=11+i*lh, mid=i<3||l==='Thank you!'||l==='*** VOIDED ***';
+      var y=11+i*lh, mid=i<(sl.loc?4:3)||l==='Thank you!'||l==='*** VOIDED ***';
       if(mid) doc.text(l,40,y,{align:'center'}); else doc.text(l,9.5,y);
     });
     doc.save('receipt-'+sl.receiptNo+'.pdf');
@@ -1588,7 +1699,7 @@ function receiptPaperHTML(sl){
   var pay=sl.method==='cash'?
     '<div class="r"><span>Cash</span><span>'+fmt(sl.tenderedCents)+'</span></div><div class="r big"><span>Change</span><span>'+fmt(sl.changeCents)+'</span></div>':
     '<div class="r"><span>Paid by</span><span>PayNow</span></div>';
-  return '<div class="paper"><div class="c shop">'+esc(shopName()||'Receipt')+'</div><div class="c">'+dt(sl.ts)+', '+tm(sl.ts)+'</div><div class="c">No. '+esc(sl.receiptNo)+'</div><hr>'+
+  return '<div class="paper"><div class="c shop">'+esc(shopName()||'Receipt')+'</div><div class="c">'+dt(sl.ts)+', '+tm(sl.ts)+'</div>'+(sl.loc?'<div class="c">'+esc(locName(sl.loc))+'</div>':'')+'<div class="c">No. '+esc(sl.receiptNo)+'</div><hr>'+
     rows+'<hr><div class="r big"><span>TOTAL</span><span>'+fmt(sl.totalCents)+'</span></div>'+pay+'<hr><div class="c">Thank you!</div>'+(sl.voided?'<div class="stamp">VOIDED</div>':'')+'</div>';
 }
 /* page a customer sees after scanning the receipt QR */
@@ -1675,23 +1786,26 @@ document.addEventListener('click',function(e){
       if(S.pending>0){toast('Wait until it says saved, then log out.');break;}
       if(S.auth){closeModal();S.auth.signOut();toast('Logged out');}
       break;
+    case 'pick-loc': setLoc(t.dataset.l); break;
+    case 'change-loc': openLocSheet(); break;
+    case 'transfer': openTransfer(); break;
     case 'new-product': openProduct(null); break;
     case 'edit-product': openProduct(id); break;
     case 'settings': openSettings(); break;
     case 'stock-filter': S.sf=t.dataset.f; updateStock(); break;
     case 'report-view': S.rv=t.dataset.v; refresh(); break;
-    case 'copy-stock': copyText(stockText(shopName(),S.products,Date.now())); break;
+    case 'copy-stock': copyText(stockText(shopName(),S.products,Date.now(),locName(S.loc))); break;
     case 'export-stock-xlsx': exportStockXlsx(); break;
     case 'export-stock-pdf': exportStockPdf(); break;
     case 'pdf-receipt': downloadReceiptPdf(S.rc); break;
     case 'sell-cat': S.cat=t.dataset.c; renderGrid(); break;
     case 'prod-cat': S.pcat=t.dataset.c; updateProducts(); break;
-    case 'copy-report': copyText(reportText(shopName(),Object.assign(dayDoc(parseMoney(S.counted)),{}))); break;
+    case 'copy-report': copyText(reportText(shopName(),Object.assign(dayDoc(parseMoney(S.counted)),{locLabel:locName(S.loc)}))); break;
     case 'today-xlsx': if(dayOpen()) exportDayXlsx(dayDoc(parseMoney(S.counted))); break;
     case 'today-pdf': if(dayOpen()) exportDayPdf(dayDoc(parseMoney(S.counted))); break;
     case 'day-xlsx': var dx=S.days.find(function(x){return x.id===id;}); if(dx) exportDayXlsx(dx); break;
     case 'day-pdf': var dp=S.days.find(function(x){return x.id===id;}); if(dp) exportDayPdf(dp); break;
-    case 'copy-day': var d=S.days.find(function(x){return x.id===id;}); if(d) copyText(reportText(shopName(),d)); break;
+    case 'copy-day': var d=S.days.find(function(x){return x.id===id;}); if(d) copyText(reportText(shopName(),Object.assign({},d,{locLabel:locName(d.loc)}))); break;
     case 'close-ask': S.closeAsk=true; updateCloseBox(); break;
     case 'close-cancel': S.closeAsk=false; updateCloseBox(); break;
     case 'close-confirm': closeDay(); break;
@@ -1713,6 +1827,19 @@ function onModal(m){
   if(a==='bplus'||a==='bminus'){var BE=S.ed; if(BE&&BE.bundle){var n=(BE.q[m.dataset.id]||0)+(a==='bplus'?1:-1); if(n<=0) delete BE.q[m.dataset.id]; else BE.q[m.dataset.id]=Math.min(n,99); paintBundleList(); paintBundleSum();} return;}
   if(a==='bsave') return saveBundle();
   if(a==='bdel') return deleteBundle();
+  if(a==='pick-loc'){
+    var li=m.dataset.l;
+    if(li===S.loc) return closeModal();
+    if(S.pending>0){toast('Wait until it says saved, then switch location.');return;}
+    setLoc(li); toast('Now at '+locName(li)); return;
+  }
+  if(a==='xdir'){var XE=S.ed; if(XE&&XE.xfer){XE.from=m.dataset.l; XE.q={}; paintTransfer();} return;}
+  if(a==='xplus'||a==='xminus'){
+    var XQ=S.ed, xp=byId(m.dataset.id);
+    if(XQ&&XQ.xfer&&xp){var xn=(XQ.q[xp.id]||0)+(a==='xplus'?1:-1); xn=Math.min(xn,stockAt(xp,XQ.from)); if(xn<=0) delete XQ.q[xp.id]; else XQ.q[xp.id]=xn; paintTransfer();}
+    return;
+  }
+  if(a==='xgo') return doTransfer();
   if(a==='save') return saveProduct();
   if(a==='del') return deleteProduct();
   if(a==='save-settings') return saveSettings();
@@ -1772,21 +1899,18 @@ function subscribe(){
   db.doc('meta/bundles').onSnapshot(function(snap){
     var d=snap.exists?snap.data():null; S.bundles=d&&Array.isArray(d.list)?d.list:[]; note(snap); pruneCart(); refresh();
   },onErr);
-  listen(db.doc('meta/day'),function(snap){
-    S.meta=snap.exists?Object.assign({},snap.data()):null; S.got.meta=true; note(snap);
-    var want=dayOpen()?S.meta.dayId:null;
-    if(want!==S.salesFor) subSales();
-    refresh();
-  },onErr);
   listen(db.collection('products'),function(snap){
-    S.products=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+    S.raw=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());}); deriveProducts();
     S.got.products=true; note(snap);
     pruneCart();
     refresh();
   },onErr);
   listen(db.collection('days').orderBy('closedAt','desc').limit(60),function(snap){
-    S.days=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());});
+    S.allDays=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());}); filterDays();
     note(snap); refresh();
+  },onErr);
+  listen(db.collection('transfers').orderBy('ts','desc').limit(30),function(snap){
+    S.transfers=snap.docs.map(function(d){return Object.assign({id:d.id},d.data());}); note(snap); refresh();
   },onErr);
   setTimeout(function(){if(!S.confirmed){S.slow=true;refresh();}},10000);
 }
@@ -1819,6 +1943,9 @@ function doSignIn(){
 function resetData(){
   S.unsubs.forEach(function(u){try{u();}catch(e){}}); S.unsubs=[];
   if(S.unsubSales){try{S.unsubSales();}catch(e){} S.unsubSales=null;}
+  if(S.unsubLoc){try{S.unsubLoc();}catch(e){} S.unsubLoc=null;}
+  try{sessionStorage.removeItem('nsapos-loc');}catch(e){}
+  S.loc=null; S.raw=[]; S.allDays=[]; S.transfers=[]; S.bundles=[];
   S.salesFor=undefined; S.got={meta:false,products:false}; S.meta=null; S.shop={}; S.products=[]; S.sales=[]; S.days=[];
   S.cart={}; S.tender=''; S.confirmed=false; S.slow=false; S.denied=false; S.closeAsk=false; S.voidAsk=null; S.key=null; S.gridSig=''; S.cartSig='';
 }
@@ -1834,7 +1961,7 @@ function initFirebase(){
     S.authReady=true;
     S.staff=!!u&&STAFF_USERS.indexOf(String(u.email||'').toLowerCase())>=0;
     if(S.staff&&S.tab==='products') S.tab='sell';
-    if(u){S.user=u; if(!S.unsubs.length) subscribe();}
+    if(u){S.user=u; if(!S.unsubs.length) subscribe(); try{var sv=sessionStorage.getItem('nsapos-loc'); if(sv&&locInfo(sv)&&!S.loc) setLoc(sv);}catch(e){}}
     else{S.user=null; resetData();}
     refresh();
   });

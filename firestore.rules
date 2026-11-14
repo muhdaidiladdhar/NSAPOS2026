@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner() {
+      return request.auth != null
+        && request.auth.uid == 'QZYuaH16CzMkCHuUUTUxM7RiPNg2';
+    }
+    function isStaff() {
+      return request.auth != null
+        && request.auth.uid == 'PASTE_NSA_UID_HERE';
+    }
+
+    // Owner: full access to everything.
+    match /{document=**} {
+      allow read, write: if isOwner();
+    }
+
+    // NSA (staff): can read everything, open/close the till at either
+    // location, record sales and day reports, and take stock down when selling.
+    match /products/{id} {
+      allow read: if isStaff();
+      allow update: if isStaff() && (
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
+          && request.resource.data.stock <= resource.data.stock)
+        ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockWb'])
+          && request.resource.data.stockWb <= resource.data.stockWb)
+      );
+    }
+    match /sales/{id} {
+      allow read, create: if isStaff();
+    }
+    match /days/{id} {
+      allow read, create: if isStaff();
+    }
+    match /transfers/{id} {
+      allow read: if isStaff();
+    }
+    match /meta/{docId} {
+      allow read: if isStaff();
+      allow write: if isStaff() && docId in ['day', 'dayWb'];
+    }
+  }
+}
